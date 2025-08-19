@@ -58,7 +58,7 @@ Effets retardés (malédictions).
 
 Omen (s’il est déclenché).
 
-### Style & accessibilité (provisoire)
+## Style & accessibilité (provisoire)
 
 Visuel 1-bit (noir/blanc), teintes CSS pour : Nuit #0B0E12, Ombre #2A2F36, Lune #E2C044, Arcane #6F5AFF, Maléfice #D14D4D, Talisman #3BA7A9.
 
@@ -68,9 +68,9 @@ Mobile-friendly : zones cliquables ≥ 64 px ; feedback visuel des flips potenti
 
 Sons : 3 bips WebAudio (pose / bouclier / flip), sans fichiers audio.
 
-### Commandes
+## Commandes
 
 Souris / tactile : sélectionner les roues à relancer (max 1 reroll au T2/T3), choisir les tuiles, cliquer les cases valides (1 ou 2 adjacentes aux T1–T2, 1 au T3), Valider.
 
-### License
+## License
 MIT (À déterminer)
