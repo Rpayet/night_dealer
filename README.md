@@ -11,14 +11,14 @@ On full-moon midnights, a black-furred card-monger — the Night Dealer — weig
 
 Goal. At round end, you score as many points as controlled squares (0–9). The match lasts up to 3 rounds: first to 9 points wins (ties possible). At the end of 3 rounds, the player with the most points is declared the winner.
 
-## Board
+### Board
 3×3 grid. Orthogonal adjacency only (N/E/S/W).
 
-## Wheels
+### Wheels
 Each player has 5 wheels with faces ATK / HEX / WARD.
 ECLIPSE: once per player per round. A wheel may have an ECLIPSE face, once used, future rolls will exclude this face. Only one ECLIPSE tile could be sorted in a round.
 
-## Turns (per round: 3 turns/player)
+### Turns (per round: 3 turns/player)
 
 *Turn 1*: initial spin mandatory (uses 1/3 rerolls), then play 1 tile or 2 adjacent tiles.
 
@@ -57,7 +57,7 @@ Delayed effects (curses).
 
 Omen (if triggered).
 
-### Look & feel (TBD)
+## Look & feel (TBD)
 
 1-bit visuals (black/white), CSS-tinted accents: Night #0B0E12, Shadow #2A2F36, Moon #E2C044, Arcane #6F5AFF, Hex #D14D4D, Ward #3BA7A9.
 
@@ -67,9 +67,9 @@ Mobile: ≥ 64 px hit-areas; optional “Apprentice” flip preview.
 
 Audio: 3 WebAudio beeps (place / shield / flip), no audio files.
 
-### Controls
+## Controls
 
 Mouse / touch: pick wheels to reroll (max 1 reroll on T2/T3), pick tiles, tap valid squares (1 or 2 adjacent on T1–T2, 1 on T3), Validate.
 
-### License
+## License
 MIT (TBD)
