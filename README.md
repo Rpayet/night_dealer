@@ -1,70 +1,75 @@
-# Getting Started with Create React App
+# **Night Dealer**
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+*Arcane duel on a 3×3 grid — ATK · HEX · WARD
+Tiny board game (JS), black-cat ritual vibe. Lightweight, mobile-friendly.*
 
-## Available Scripts
+## Synopsis
 
-In the project directory, you can run:
+On full-moon midnights, a black-furred card-monger — the Night Dealer — weighs the fate of cats. On a 3×3 board, play your arcana to flip adjacent tiles and steal back time. Win rounds, stack life-points up to 9.
 
-### `npm start`
+## Rules (V1.1)
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+Goal. At round end, you score as many points as controlled squares (0–9). The match lasts up to 3 rounds: first to 9 points wins (ties possible). At the end of 3 rounds, the player with the most points is declared the winner.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Board
+3×3 grid. Orthogonal adjacency only (N/E/S/W).
 
-### `npm test`
+## Wheels
+Each player has 5 wheels with faces ATK / HEX / WARD.
+ECLIPSE: once per player per round. A wheel may have an ECLIPSE face, once used, future rolls will exclude this face. Only one ECLIPSE tile could be sorted in a round.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Turns (per round: 3 turns/player)
 
-### `npm run build`
+*Turn 1*: initial spin mandatory (uses 1/3 rerolls), then play 1 tile or 2 adjacent tiles.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+*Turn 2*: 0–1 reroll optional, then play 1 or 2 adjacent.
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+*Turn 3*: 0–1 reroll optional, cap at 1 tile (anti-dump).
+Playing a tile consumes its wheel (can’t be spun again).
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+RPS triangle. ATK > HEX > WARD > ATK (ties do nothing).
 
-### `npm run eject`
+### Tiles
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+ATK (Claw). Beats HEX, loses to WARD.
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+HEX (Curse/Trap, choose one on place).
+Curse: if a WARD enemy is adjacent, immediate flip via RPS; else mark 1 adjacent enemy → at the end of the opponent’s next turn, attempt to flip (blocked by shields).
+Trap: place 1 visible token on 1 adjacent empty square. If the foe plays there: cancel on-place effect, then immediate flip attempt (blocked by shield). Cap: 1 active trap per player (new replaces old).
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+WARD (Talisman). On place: +1 shield on self and +1 shield on 1 adjacent ally (per-tile cap = 1). Beats ATK, loses to HEX.
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+ECLIPSE (Joker). On place, choose an affinity (ATK/HEX/WARD) → it’s an attribute (a trap does not cancel this choice). 1×/round per player.
 
-## Learn More
+Omen (second-player balance). P2 may cancel 1 flip attempt per round (any step).
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### Reveal & resolve (on “Validate”).
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+Trap tag: any tile played onto a trapped cell has its on-place effect canceled (attributes remain).
 
-### Code Splitting
+On-place effects for the other tiles (e.g., WARD shields).
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+Trap triggers (immediate flip attempt; shield may block) → trap consumed.
 
-### Analyzing the Bundle Size
+Simultaneous RPS conversions (orthogonal).
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+Delayed effects (curses).
 
-### Making a Progressive Web App
+Omen (if triggered).
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+### Look & feel (TBD)
 
-### Advanced Configuration
+1-bit visuals (black/white), CSS-tinted accents: Night #0B0E12, Shadow #2A2F36, Moon #E2C044, Arcane #6F5AFF, Hex #D14D4D, Ward #3BA7A9.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+Icons: ATK (claw), HEX (rune/eye), WARD (seal), ECLIPSE (crescent), shield, trap (token).
 
-### Deployment
+Mobile: ≥ 64 px hit-areas; optional “Apprentice” flip preview.
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+Audio: 3 WebAudio beeps (place / shield / flip), no audio files.
 
-### `npm run build` fails to minify
+### Controls
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Mouse / touch: pick wheels to reroll (max 1 reroll on T2/T3), pick tiles, tap valid squares (1 or 2 adjacent on T1–T2, 1 on T3), Validate.
+
+### License
+MIT (TBD)
