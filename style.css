@@ -2,3 +2,16 @@
   --night:#0B0E12; --shadow:#2A2F36; --moon:#E2C044;
   --arcane:#6F5AFF; --hex:#D14D4D; --ward:#3BA7A9;
 }
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--night);color:#ddd;font:14px/1.4 system-ui,Segoe UI,Roboto,Arial}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px}
+canvas{image-rendering:pixelated;image-rendering:crisp-edges;outline:1px solid #222;border-radius:8px;background:var(--night)}
+.hud{display:flex;gap:8px;align-items:center}
+button{
+  background:#141820;border:1px solid #2a2f36;color:#ddd;padding:6px 10px;border-radius:6px;
+}
+button:hover{border-color:#3a4150}
+#label-turn{min-width:120px;display:inline-block;opacity:.85}
+@media (min-width:420px){
+  canvas{width:360px;height:360px}
+}

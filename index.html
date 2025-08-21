@@ -2,11 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
     <title>Night Dealer - Prototype</title>
+    <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-    <p>Starting</p>
+    <canvas id="game" width="320" height="320" aria-label="Night Dealer board"></canvas>
+    <div class="hud">
+        <button id="btn-reroll" title="Reroll your tiles available (once per turn)">Reroll</button>
+        <button id="btn-validate" title="End your turn">Validate</button>
+        <span id="label-turn"></span>
+    </div>
 </body>
 <script src="main.js"></script>
 </html>
