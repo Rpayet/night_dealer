@@ -1,17 +1,227 @@
-:root{
-  --night:#0B0E12; --shadow:#2A2F36; --moon:#E2C044;
-  --arcane:#6F5AFF; --hex:#D14D4D; --ward:#3BA7A9;
+:root {
+    --night: #0B0E12;
+    --shadow: #2A2F36;
+    --moon: #E2C044;
+    --arcane: #6F5AFF;
+    --hex: #D14D4D;
+    --ward: #3BA7A9;
 }
-*{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:var(--night);color:#ddd;font:14px/1.4 system-ui,Segoe UI,Roboto,Arial}
-body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:12px}
-canvas{image-rendering:pixelated;image-rendering:crisp-edges;outline:1px solid #222;border-radius:8px;background:var(--night)}
-.hud{display:flex;gap:8px;align-items:center}
-button{
-  background:#141820;border:1px solid #2a2f36;color:#ddd;padding:6px 10px;border-radius:6px;
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
 }
-button:hover{border-color:#3a4150}
-#label-turn{min-width:120px;display:inline-block;opacity:.85}
-@media (min-width:420px){
-  canvas{width:360px;height:360px}
+
+body {
+    font-family: 'Courier New', monospace;
+    background: var(--night);
+    color: var(--moon);
+    min-height: 100vh;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.game-container {
+    max-width: 600px;
+    width: 100%;
+}
+
+.header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.header h1 {
+    font-size: 2em;
+    color: var(--moon);
+    text-shadow: 2px 2px 4px var(--shadow);
+}
+
+.game-info {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    padding: 10px;
+    background: var(--shadow);
+    border-radius: 8px;
+}
+
+.score, .round-info, .turn-info {
+    text-align: center;
+}
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    margin: 20px 0;
+    background: var(--shadow);
+    padding: 10px;
+    border-radius: 8px;
+}
+
+.cell {
+    width: 80px;
+    height: 80px;
+    background: var(--night);
+    border: 2px solid var(--shadow);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+    font-size: 12px;
+}
+
+.cell.valid {
+    border-color: var(--moon);
+    box-shadow: 0 0 10px var(--moon);
+}
+
+.cell.player1 {
+    background: var(--arcane);
+    color: white;
+}
+
+.cell.player2 {
+    background: var(--hex);
+    color: white;
+}
+
+.tile-type {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.shields {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    font-size: 10px;
+    color: var(--ward);
+}
+
+.trap-token {
+    position: absolute;
+    bottom: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
+    background: var(--hex);
+    border-radius: 50%;
+}
+
+.wheels-container {
+    margin: 20px 0;
+    padding: 15px;
+    background: var(--shadow);
+    border-radius: 8px;
+}
+
+.player-wheels {
+    margin-bottom: 15px;
+}
+
+.player-title {
+    font-weight: bold;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.wheels {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.wheel {
+    width: 64px;
+    height: 64px;
+    border: 2px solid var(--moon);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 20px;
+    font-weight: bold;
+    background: var(--night);
+    transition: all 0.3s;
+}
+
+.wheel.used {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.wheel.selected {
+    background: var(--moon);
+    color: var(--night);
+}
+
+.wheel.atk { color: var(--moon); }
+.wheel.hex { color: var(--hex); }
+.wheel.ward { color: var(--ward); }
+.wheel.eclipse { color: var(--arcane); }
+
+.controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin: 20px 0;
+}
+
+.btn {
+    padding: 12px 20px;
+    border: 2px solid var(--moon);
+    background: var(--night);
+    color: var(--moon);
+    cursor: pointer;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    transition: all 0.3s;
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--moon);
+    color: var(--night);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.phase-info {
+    text-align: center;
+    margin: 10px 0;
+    font-size: 18px;
+    color: var(--arcane);
+}
+
+.message {
+    text-align: center;
+    margin: 10px 0;
+    padding: 10px;
+    background: var(--shadow);
+    border-radius: 8px;
+    min-height: 40px;
+}
+
+@media (max-width: 600px) {
+    .cell {
+        width: 70px;
+        height: 70px;
+    }
+    
+    .wheel {
+        width: 56px;
+        height: 56px;
+        font-size: 18px;
+    }
 }

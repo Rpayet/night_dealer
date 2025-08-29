@@ -1,215 +1,382 @@
-/* Night Dealer — vanilla skeleton (JS) */
-(() => {
-  'use strict';
+// NIGHT DEALER - STEP 2: REROLL MANAGEMENT AND TURN START
 
-  // ===== Palette (1-bit + teintes CSS en rendu) =====
-  const PAL = {
-    night: '#0B0E12', shadow: '#2A2F36', moon: '#E2C044',
-    arcane: '#6F5AFF', hex: '#D14D4D', ward: '#3BA7A9',
-    white:'#FFFFFF', black:'#000000'
-  };
+// ===== CONSTANTS =====
+const TILE_TYPES = {
+  ATK: 'ATK', HEX: 'HEX', WARD: 'WARD', ECLIPSE: 'ECLIPSE'
+};
 
-  // ===== RNG (xorshift32) — deterministic seeds for testing =====
-  function XS32(seed=0xC0FFEE) {
-    let s = seed|0;
-    const next = () => {
-      s ^= s << 13; s ^= s >>> 17; s ^= s << 5; return (s>>>0);
-    };
-    return {
-      next,
-      int:(n)=> next()%n,
-      float:()=> (next()>>>0) / 0xFFFFFFFF
-    };
+const TILE_ICONS = {
+  ATK: '⚔️', HEX: '👁️', WARD: '🛡️', ECLIPSE: '🌙'
+};
+
+// Probability of ECLIPSE appearing (adjustable)
+const ECLIPSE_PROBABILITY = 0.2; // 20%
+
+// ===== GAME STATE (extended) =====
+const gameState = {
+  currentPlayer: 1,
+  currentRound: 1,
+  currentTurn: 1,
+  scores: [0, 0],
+  board: Array(9).fill(null),
+  
+  players: [
+    {
+      wheels: [],
+      selectedWheels: [],
+      usedWheels: [],
+      rerollsUsed: 0,
+      eclipseUsed: false,
+      omenUsed: false,
+      isHuman: true        // Player 1 = human
+    },
+    {
+      wheels: [],
+      selectedWheels: [],
+      usedWheels: [],
+      rerollsUsed: 0,
+      eclipseUsed: false,
+      omenUsed: false,
+      isHuman: false       // Player 2 = AI
+    }
+  ],
+  
+  selectedTiles: [],
+  phase: 'reroll',
+  gameOver: false,
+  traps: [],
+  pendingCurses: [],
+  
+  // New: control for the first turn
+  firstTurnAutoReroll: true    // First turn forces an automatic reroll
+};
+
+// ===== REROLL FUNCTIONS =====
+
+/**
+ * Rolls a wheel to get a random face
+ */
+function rollWheel(playerIndex, wheelIndex) {
+  const player = gameState.players[playerIndex];
+  const availableTypes = ['ATK', 'HEX', 'WARD'];
+  
+  // ECLIPSE possible if not yet used this round
+  if (!player.eclipseUsed && Math.random() < ECLIPSE_PROBABILITY) {
+    availableTypes.push('ECLIPSE');
   }
+  
+  return availableTypes[Math.floor(Math.random() * availableTypes.length)];
+}
 
-  // ===== Helpers =====
-  const idx = (x,y)=> y*3+x;                   // 0..8
-  const inb = (x,y)=> x>=0 && x<3 && y>=0 && y<3;
-  const neigh4 = i => {                         // N,E,S,W indices
-    const x=i%3,y=(i/3)|0, r=[];
-    if(inb(x, y-1)) r.push(idx(x,y-1));
-    if(inb(x+1,y)) r.push(idx(x+1,y));
-    if(inb(x, y+1)) r.push(idx(x,y+1));
-    if(inb(x-1,y)) r.push(idx(x-1,y));
-    return r;
-  };
-  const RPS = { ATK:{win:'HEX',lose:'WARD'}, HEX:{win:'WARD',lose:'ATK'}, WARD:{win:'ATK',lose:'HEX'} };
+/**
+ * Randomly chooses the first player
+ * @returns {number} 1 or 2
+ */
+function chooseFirstPlayer() {
+  return Math.random() < 0.5 ? 1 : 2;
+}
 
-  // ===== State =====
-  const nd = window.nd = {};
-  const rng = nd.rng = XS32(Date.now()|0);
-
-  nd.state = {
-    board: Array.from({length:9},()=>({owner:0,type:null,aff:null,shield:0,curse:null})),
-    traps: {1:-1, 2:-1},     // traps: index of one active token per player, -1 if none
-    wheels: {1: [], 2: []},  // Array of 5 affinities to set on a roll
-    used: {1:[0,0,0,0,0], 2:[0,0,0,0,0]}, // 1 if wheel consumed
-    reroll: {1:2, 2:2},   // (First turn uses 1 mandatory roll)
-    eclipseUsed: {1:0, 2:0},   // Number of times eclipse has been used
-    omen: {1:0, 2:1},     // P2 has 1 flip cancellation
-    turn: {who:1, n:1, placed:[]}, // placed: cells chosen this turn (revealed on validate)
-    score: {1:0, 2:0}, round:1    // Current score & round number
-  };
-
-  // ===== Canvas bootstrap (HiDPI safe) =====
-  const cvs = document.getElementById('game');
-  const ctx = cvs.getContext('2d');
-  function fitDPI() {
-    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio||1));
-    const cssW = cvs.clientWidth || 320, cssH = cvs.clientHeight || 320;
-    cvs.width = Math.round(cssW*dpr);
-    cvs.height = Math.round(cssH*dpr);
-    ctx.setTransform(cvs.width/320, 0, 0, cvs.height/320, 0, 0); // virtual space 320×320
-    draw();
+/**
+ * Initializes a new round
+ */
+function initNewRound() {
+  console.log(`🌙 Start of Round ${gameState.currentRound}`);
+  
+  // Reset board and special elements
+  gameState.board = Array(9).fill(null);
+  gameState.traps = [];
+  gameState.pendingCurses = [];
+  gameState.selectedTiles = [];
+  
+  // Choose first player (random only in round 1)
+  if (gameState.currentRound === 1) {
+    gameState.currentPlayer = chooseFirstPlayer();
+    console.log(`First player chosen randomly: Player ${gameState.currentPlayer}`);
   }
-  window.addEventListener('resize', fitDPI, {passive:true});
+  
+  gameState.currentTurn = 1;
+  gameState.phase = 'reroll';
+  gameState.firstTurnAutoReroll = true;
+  
+  // Initialize wheels for both players
+  initializePlayers();
+  
+  // Automatic reroll for the first turn
+  executeFirstTurnAutoReroll();
+}
 
-  // ===== Basic draw (board + tokens + traps) =====
-  function drawBoardGrid() {
-    ctx.fillStyle = PAL.night;
-    ctx.fillRect(0,0,320,320);
-
-    // 3×3 grid area (centered)
-    const ox=64, oy=64, s=192, cell=s/3;
-    ctx.strokeStyle = PAL.shadow; ctx.lineWidth = 2;
-    ctx.strokeRect(ox,oy,s,s);
-    for(let i=1;i<3;i++){
-      ctx.beginPath(); ctx.moveTo(ox+i*cell,oy); ctx.lineTo(ox+i*cell,oy+s); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(ox,oy+i*cell); ctx.lineTo(ox+s,oy+i*cell); ctx.stroke();
-    }
-
-    // checker texture (1-bit rug)
-    for(let y=0;y<3;y++)for(let x=0;x<3;x++){
-      ctx.fillStyle = ((x+y)&1)? PAL.black : PAL.white;
-      ctx.fillRect(ox+x*cell+2, oy+y*cell+2, cell-4, cell-4);
-    }
-  }
-
-  function drawTokens() {
-    const ox=64, oy=64, s=192, cell=s/3;
-    const {board,traps} = nd.state;
-
-    // traps (tokens)
-    for (const p of [1,2]) {
-      const ti = traps[p];
-      if (ti>=0) {
-        const x=ti%3, y=(ti/3)|0;
-        const cx = ox+x*cell+cell/2, cy = oy+y*cell+cell/2;
-        ctx.strokeStyle = PAL.moon; ctx.fillStyle = PAL.shadow;
-        ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      }
-    }
-
-    // pieces
-    for(let i=0;i<9;i++){
-      const c = board[i]; if(!c.type) continue;
-      const x=i%3, y=(i/3)|0;
-      const cx = ox+x*cell+cell/2, cy = oy+y*cell+cell/2;
-      // owner tint ring
-      ctx.strokeStyle = c.owner===1 ? PAL.arcane : PAL.hex;
-      ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx,cy,20,0,Math.PI*2); ctx.stroke();
-      // draw symbol
-      if (c.type==='ATK') { // three scratches
-        ctx.strokeStyle = PAL.white; ctx.lineWidth=2;
-        for(let k=-1;k<=1;k++){
-          ctx.beginPath(); ctx.moveTo(cx-8, cy-6+k*4); ctx.lineTo(cx+8, cy-2+k*4); ctx.stroke();
-        }
-      } else if (c.type==='HEX') { // rune/eye
-        ctx.strokeStyle = PAL.hex; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.arc(cx,cy,10,0,Math.PI*2); ctx.stroke();
-        ctx.fillStyle = PAL.hex; ctx.fillRect(cx-1, cy-3, 2, 6);
-      } else if (c.type==='WARD') { // seal
-        ctx.strokeStyle = PAL.ward; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.moveTo(cx-10,cy); ctx.lineTo(cx,cy-10); ctx.lineTo(cx+10,cy); ctx.lineTo(cx,cy+10); ctx.closePath(); ctx.stroke();
-      } else if (c.type==='ECLIPSE') { // crescent
-        ctx.fillStyle = PAL.moon; ctx.beginPath(); ctx.arc(cx,cy,10,0,Math.PI*2); ctx.fill();
-        ctx.fillStyle = PAL.night; ctx.beginPath(); ctx.arc(cx+4,cy,10,0,Math.PI*2); ctx.fill();
-      }
-      // shield pip
-      if (c.shield>0){ ctx.fillStyle = PAL.ward; ctx.fillRect(cx+12, cy-12, 6, 6); }
-      // curse mark
-      if (c.curse){ ctx.fillStyle = PAL.hex; ctx.fillRect(cx-3, cy-14, 6, 6); }
-    }
-
-    // highlight pending placements (face-down until validate)
-    const pend = nd.state.turn.placed;
-    for (const p of pend) {
-      const x=p%3, y=(p/3)|0;
-      ctx.strokeStyle = PAL.arcane; ctx.setLineDash([4,3]);
-      ctx.strokeRect(64+x*cell+4, 64+y*cell+4, cell-8, cell-8);
-      ctx.setLineDash([]);
+/**
+ * Initializes the wheels for both players for a new round
+ */
+function initializePlayers() {
+  for (let playerIndex = 0; playerIndex < 2; playerIndex++) {
+    const player = gameState.players[playerIndex];
+    
+    // Reset round states
+    player.selectedWheels = [];
+    player.usedWheels = [];
+    player.rerollsUsed = 0;
+    player.eclipseUsed = false;
+    player.omenUsed = false;
+    
+    // Generate 5 wheels
+    player.wheels = [];
+    for (let wheelIndex = 0; wheelIndex < 5; wheelIndex++) {
+      player.wheels.push(rollWheel(playerIndex, wheelIndex));
     }
   }
+}
 
-  function drawHUD(){
-    document.getElementById('label-turn').textContent =
-      `T${nd.state.turn.n} · J${nd.state.turn.who}`;
+/**
+ * Executes the mandatory automatic reroll for the first turn
+ */
+function executeFirstTurnAutoReroll() {
+  if (!gameState.firstTurnAutoReroll) return;
+  
+  console.log(`Automatic reroll for Turn 1 for Player ${gameState.currentPlayer}`);
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  // Reroll all unused wheels (all in turn 1)
+  for (let wheelIndex = 0; wheelIndex < 5; wheelIndex++) {
+    if (!currentPlayer.usedWheels.includes(wheelIndex)) {
+      currentPlayer.wheels[wheelIndex] = rollWheel(gameState.currentPlayer - 1, wheelIndex);
+    }
   }
+  
+  currentPlayer.rerollsUsed = 1; // Mark reroll as used
+  gameState.firstTurnAutoReroll = false;
+  gameState.phase = 'place'; // Go directly to placement phase
+  
+  console.log('New wheels after auto reroll:', currentPlayer.wheels);
+}
 
-  function draw(){
-    drawBoardGrid();
-    drawTokens();
-    drawHUD();
+/**
+ * Checks if reroll is available for the current player
+ * @returns {boolean} True if reroll possible
+ */
+function isRerollAvailable() {
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  // No reroll in turn 1 (automatic)
+  if (gameState.currentTurn === 1) return false;
+  
+  // No reroll if already used
+  if (currentPlayer.rerollsUsed >= 1) return false;
+  
+  // No reroll if tiles are already selected for placement
+  if (gameState.selectedTiles.length > 0) return false;
+  
+  // Must have available wheels
+  const availableWheels = getAvailableWheels(gameState.currentPlayer - 1);
+  return availableWheels.length > 0;
+}
+
+/**
+ * Gets the list of available (unused) wheels for a player
+ * @param {number} playerIndex - Player index (0 or 1)
+ * @returns {number[]} Array of indices of available wheels
+ */
+function getAvailableWheels(playerIndex) {
+  const player = gameState.players[playerIndex];
+  const availableWheels = [];
+  
+  for (let i = 0; i < 5; i++) {
+    if (!player.usedWheels.includes(i)) {
+      availableWheels.push(i);
+    }
   }
+  
+  return availableWheels;
+}
 
-  // ===== Turn flow (stubs to expand) =====
-  function startRound(){
-    const s=nd.state;
-    // roll initial faces here later; for now leave placeholders
-    s.turn = {who: (rng.int(2)?1:2), n:1, placed:[]}; // random player starts
-    draw();
+/**
+ * Executes the reroll of ALL available wheels (turns 2 and 3)
+ * RULE: Reroll automatically shuffles all unused wheels
+ */
+function executeReroll() {
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  // Checks
+  if (!isRerollAvailable()) {
+    console.log('Error: Reroll not available');
+    return false;
   }
-
-  function maybeReroll(){
-    // TODO: implement wheel selection and reroll rules (1 per T2/T3)
+  
+  if (gameState.phase !== 'reroll') {
+    console.log('Error: Not in reroll phase');
+    return false;
   }
-
-  function placeAt(cellIndex, tileType='ATK', affinity=null){
-    const s=nd.state; const me=s.turn.who;
-    if (s.turn.n===3 && s.turn.placed.length>=1) return; // cap 1 on T3
-    if (s.turn.placed.length>=2) return; // cap 2 at T1/T2
-    const c=s.board[cellIndex]; if (c.type) return; // occupied
-    // queue placement (face-down)
-    // TODO: implement ghost preview
-    s.turn.placed.push(cellIndex);
-    // store a temporary ghost (for preview) — real commit happens on validate/resolve
-    s.board[cellIndex] = {owner:me,type:tileType,aff:affinity||tileType,shield:0,curse:null};
-    draw();
+  
+  // Get all available (unused) wheels
+  const availableWheels = getAvailableWheels(gameState.currentPlayer - 1);
+  
+  if (availableWheels.length === 0) {
+    console.log('Error: No wheels available for reroll');
+    return false;
   }
-
-  function validate(){
-    // Resolve order (Piège tag -> On-place -> Trap triggers -> RPS -> Delayed -> Omen)
-    // TODO: implement full rules; for now, just commit placements without effects
-    nd.state.turn.placed.length = 0;
-    // next turn
-    const t=nd.state.turn;
-    if (t.n<3){ nd.state.turn = {who: t.who===1?2:1, n: t.n, placed:[]}; }
-    else { nd.state.turn = {who: t.who===1?2:1, n: 3, placed:[]}; } // ! keep simple for now
-    draw();
-  }
-
-  // ===== Input =====
-  function pickCellFromPointer(ev){
-    const rect = cvs.getBoundingClientRect();
-    const x = (ev.clientX - rect.left) * (320 / rect.width);
-    const y = (ev.clientY - rect.top) * (320 / rect.height);
-    const ox=64, oy=64, s=192, cell=s/3;
-    if (x<ox||y<oy||x>=ox+s||y>=oy+s) return -1;
-    const cx = Math.floor((x-ox)/cell), cy = Math.floor((y-oy)/cell);
-    return idx(cx,cy);
-  }
-
-  cvs.addEventListener('pointerdown', (ev)=>{
-    const i = pickCellFromPointer(ev); if (i<0) return;
-    // TEMP: place ATK by default
-    // TODO : wire wheels UI next
-    placeAt(i, 'ATK');
+  
+  // Automatically reroll ALL available wheels
+  console.log(`Automatic reroll of ${availableWheels.length} available wheels for Player ${gameState.currentPlayer}`);
+  
+  availableWheels.forEach(wheelIndex => {
+    const oldValue = currentPlayer.wheels[wheelIndex];
+    currentPlayer.wheels[wheelIndex] = rollWheel(gameState.currentPlayer - 1, wheelIndex);
+    console.log(`Wheel ${wheelIndex}: ${oldValue} → ${currentPlayer.wheels[wheelIndex]}`);
   });
+  
+  currentPlayer.selectedWheels = []; // Clear all selection
+  currentPlayer.rerollsUsed = 1;
+  gameState.phase = 'place';
+  
+  return true;
+}
 
-  document.getElementById('btn-validate').addEventListener('click', validate);
-  document.getElementById('btn-reroll').addEventListener('click', maybeReroll);
+/**
+ * Simple AI: decides if it wants to reroll (turns 2 and 3)
+ */
+function aiDecideReroll() {
+  const aiPlayer = gameState.players[1]; // Player 2 = AI
+  
+  if (gameState.currentTurn === 1) {
+    // Turn 1: automatic reroll already done
+    return;
+  }
+  
+  if (!isRerollAvailable()) {
+    console.log('AI: Reroll not available, moving to placement');
+    gameState.phase = 'place';
+    return;
+  }
+  
+  // Simple strategy: 40% chance to reroll
+  if (Math.random() < 0.4) {
+    console.log('AI decides to reroll');
+    executeReroll();
+  } else {
+    console.log('AI decides not to reroll');
+    gameState.phase = 'place';
+  }
+}
 
-  // ===== Boot =====
-  fitDPI();
-  startRound();
-})();
+/**
+ * Goes directly to placement phase (without reroll)
+ */
+function skipRerollToPlace() {
+  if (!isRerollAvailable() && gameState.phase === 'reroll') {
+    console.log('Reroll not available, automatically moving to placement');
+    gameState.phase = 'place';
+    return true;
+  }
+  
+  if (gameState.phase === 'reroll' && gameState.currentTurn > 1) {
+    console.log('Player chooses not to reroll');
+    gameState.phase = 'place';
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Starts a new turn
+ */
+function startNewTurn() {
+  console.log(`\n=== TURN ${gameState.currentTurn} - PLAYER ${gameState.currentPlayer} ===`);
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  // Reset for the new turn
+  currentPlayer.selectedWheels = [];
+  currentPlayer.rerollsUsed = 0;
+  gameState.selectedTiles = [];
+  
+  if (gameState.currentTurn === 1) {
+    // Turn 1: mandatory automatic reroll
+    gameState.phase = 'reroll';
+    gameState.firstTurnAutoReroll = true;
+    executeFirstTurnAutoReroll();
+  } else {
+    // Turns 2 and 3: optional reroll
+    gameState.phase = 'reroll';
+    
+    if (currentPlayer.isHuman) {
+      console.log('Human player turn - waiting for reroll decision');
+    } else {
+      // AI makes its decision automatically
+      setTimeout(() => aiDecideReroll(), 500); // Small delay for simulation
+    }
+  }
+}
+
+/**
+ * Initializes the complete game
+ */
+function initGame() {
+  console.log('🌙 Initializing Night Dealer...');
+  
+  // Global reset
+  gameState.currentRound = 1;
+  gameState.currentTurn = 1;
+  gameState.scores = [0, 0];
+  gameState.gameOver = false;
+  
+  // Start the first round
+  initNewRound();
+}
+
+/**
+ * Displays the game state with focus on rerolls
+ */
+function debugRerollState() {
+  console.log('\n=== REROLL STATE ===');
+  console.log(`Round ${gameState.currentRound}, Turn ${gameState.currentTurn}, Phase: ${gameState.phase}`);
+  console.log(`Current player: ${gameState.currentPlayer} (${gameState.players[gameState.currentPlayer - 1].isHuman ? 'Human' : 'AI'})`);
+  console.log(`Reroll available: ${isRerollAvailable()}`);
+  
+  gameState.players.forEach((player, index) => {
+    console.log(`\nPlayer ${index + 1}:`);
+    if (index === 0 || !player.isHuman) { // Show wheels for human player or in debug
+      console.log(`  Wheels: ${player.wheels.join(', ')}`);
+    } else {
+      console.log(`  Wheels: [HIDDEN - AI]`);
+    }
+    console.log(`  Used wheels: [${player.usedWheels.join(', ')}] (${5 - player.usedWheels.length} available)`);
+    console.log(`  Rerolls: ${player.rerollsUsed}/1`);
+    console.log(`  Eclipse used: ${player.eclipseUsed}`);
+  });
+  
+  console.log(`\nCurrent selections:`);
+  console.log(`  Selected tiles: [${gameState.selectedTiles.join(', ')}]`);
+}
+
+// ===== EXPORTS AND TESTS =====
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    gameState, initGame, executeReroll, skipRerollToPlace, isRerollAvailable,
+    getAvailableWheels, startNewTurn, debugRerollState, TILE_TYPES, TILE_ICONS
+  };
+} else {
+  // Automatic test
+  document.addEventListener('DOMContentLoaded', () => {
+    initGame();
+    debugRerollState();
+    
+    // Simulation of a complete cycle
+    setTimeout(() => {
+      console.log('\n--- SIMULATION MOVE TO TURN 2 ---');
+      gameState.currentTurn = 2;
+      gameState.currentPlayer = 1; // Human player
+      gameState.players[0].usedWheels = [0, 1]; // Simulate 2 used wheels
+      startNewTurn();
+      setTimeout(() => {
+        debugRerollState();
+        console.log('\n--- TEST REROLL WITH 3 AVAILABLE WHEELS ---');
+        if (isRerollAvailable()) {
+          executeReroll();
+          debugRerollState();
+        }
+      }, 1000);
+    }, 2000);
+  });
+}
