@@ -1,4 +1,4 @@
-// NIGHT DEALER - STEP 2: REROLL MANAGEMENT AND TURN START
+// NIGHT DEALER
 
 // ===== CONSTANTS =====
 const TILE_TYPES = {
@@ -9,16 +9,15 @@ const TILE_ICONS = {
   ATK: '⚔️', HEX: '👁️', WARD: '🛡️', ECLIPSE: '🌙'
 };
 
-// Probability of ECLIPSE appearing (adjustable)
-const ECLIPSE_PROBABILITY = 0.2; // 20%
+const ECLIPSE_PROBABILITY = 0.2;
 
-// ===== GAME STATE (extended) =====
+// ===== GAME STATE =====
 const gameState = {
   currentPlayer: 1,
   currentRound: 1,
   currentTurn: 1,
   scores: [0, 0],
-  board: Array(9).fill(null),
+  board: Array(9).fill(null), // Each cell contains null or a tile object
   
   players: [
     {
@@ -28,7 +27,7 @@ const gameState = {
       rerollsUsed: 0,
       eclipseUsed: false,
       omenUsed: false,
-      isHuman: true        // Player 1 = human
+      isHuman: true
     },
     {
       wheels: [],
@@ -37,153 +36,173 @@ const gameState = {
       rerollsUsed: 0,
       eclipseUsed: false,
       omenUsed: false,
-      isHuman: false       // Player 2 = AI
+      isHuman: false
     }
   ],
   
-  selectedTiles: [],
-  phase: 'reroll',
+  // Placement management
+  selectedTiles: [],        // Selected cells for placement [cellIndex, ...]
+  selectedWheels: [],       // Wheels selected for these placements [wheelIndex, ...]
+  phase: 'reroll',         // 'reroll' or 'place'
   gameOver: false,
-  traps: [],
-  pendingCurses: [],
   
-  // New: control for the first turn
-  firstTurnAutoReroll: true    // First turn forces an automatic reroll
+  traps: [],               // Active traps [{player, cell, type}]
+  pendingCurses: [],       // Pending curses
+  firstTurnAutoReroll: true
 };
 
-// ===== REROLL FUNCTIONS =====
+// Structure of a tile on the board
+const createTile = (player, type, wheelIndex) => ({
+  player: player,          // 1 or 2
+  type: type,              // ATK, HEX, WARD, ECLIPSE
+  wheelIndex: wheelIndex,  // Index of the wheel used
+  shields: 0,              // Number of shields
+  cursed: false,           // Curse marker
+  trapToken: null          // Associated trap token
+});
+
+// ===== PLACEMENT FUNCTIONS =====
 
 /**
- * Rolls a wheel to get a random face
+ * Checks if a cell can receive a tile
+ * @param {number} cellIndex - Cell index (0-8)
+ * @returns {boolean} True if placement is valid
  */
-function rollWheel(playerIndex, wheelIndex) {
-  const player = gameState.players[playerIndex];
-  const availableTypes = ['ATK', 'HEX', 'WARD'];
-  
-  // ECLIPSE possible if not yet used this round
-  if (!player.eclipseUsed && Math.random() < ECLIPSE_PROBABILITY) {
-    availableTypes.push('ECLIPSE');
-  }
-  
-  return availableTypes[Math.floor(Math.random() * availableTypes.length)];
+function isCellEmpty(cellIndex) {
+  return cellIndex >= 0 && cellIndex < 9 && gameState.board[cellIndex] === null;
 }
 
 /**
- * Randomly chooses the first player
- * @returns {number} 1 or 2
+ * Checks if two cells are orthogonally adjacent
+ * @param {number} cellA - Index cell A
+ * @param {number} cellB - Index cell B  
+ * @returns {boolean} True if adjacent
  */
-function chooseFirstPlayer() {
-  return Math.random() < 0.5 ? 1 : 2;
+function areAdjacent(cellA, cellB) {
+  const rowA = Math.floor(cellA / 3);
+  const colA = cellA % 3;
+  const rowB = Math.floor(cellB / 3);
+  const colB = cellB % 3;
+  
+  return (Math.abs(rowA - rowB) === 1 && colA === colB) ||
+       (Math.abs(colA - colB) === 1 && rowA === rowB);
 }
 
 /**
- * Initializes a new round
+ * Gets the cells adjacent to a given position
+ * @param {number} cellIndex - Cell index
+ * @returns {number[]} Array of adjacent cells
  */
-function initNewRound() {
-  console.log(`🌙 Start of Round ${gameState.currentRound}`);
+function getAdjacentCells(cellIndex) {
+  const row = Math.floor(cellIndex / 3);
+  const col = cellIndex % 3;
+  const adjacent = [];
   
-  // Reset board and special elements
-  gameState.board = Array(9).fill(null);
-  gameState.traps = [];
-  gameState.pendingCurses = [];
-  gameState.selectedTiles = [];
+  // Checks the 4 directions: North, East, South, West
+  const directions = [[-1, 0], [0, 1], [1, 0], [0, -1]];
   
-  // Choose first player (random only in round 1)
-  if (gameState.currentRound === 1) {
-    gameState.currentPlayer = chooseFirstPlayer();
-    console.log(`First player chosen randomly: Player ${gameState.currentPlayer}`);
-  }
-  
-  gameState.currentTurn = 1;
-  gameState.phase = 'reroll';
-  gameState.firstTurnAutoReroll = true;
-  
-  // Initialize wheels for both players
-  initializePlayers();
-  
-  // Automatic reroll for the first turn
-  executeFirstTurnAutoReroll();
-}
-
-/**
- * Initializes the wheels for both players for a new round
- */
-function initializePlayers() {
-  for (let playerIndex = 0; playerIndex < 2; playerIndex++) {
-    const player = gameState.players[playerIndex];
+  directions.forEach(([deltaRow, deltaCol]) => {
+    const newRow = row + deltaRow;
+    const newCol = col + deltaCol;
     
-    // Reset round states
-    player.selectedWheels = [];
-    player.usedWheels = [];
-    player.rerollsUsed = 0;
-    player.eclipseUsed = false;
-    player.omenUsed = false;
+    if (newRow >= 0 && newRow < 3 && newCol >= 0 && newCol < 3) {
+      adjacent.push(newRow * 3 + newCol);
+    }
+  });
+  
+  return adjacent;
+}
+
+/**
+ * Checks if a tile placement is valid according to the rules
+ * @param {number[]} selectedCells - Selected cells
+ * @returns {boolean} True if placement is valid
+ */
+function isPlacementValid(selectedCells) {
+  // Must have at least one tile
+  if (selectedCells.length === 0) return false;
+  
+  // Maximum according to the turn (T1-T2: 2 tiles, T3: 1 tile)
+  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+  if (selectedCells.length > maxTiles) return false;
+  
+  // All cells must be empty
+  if (!selectedCells.every(cell => isCellEmpty(cell))) return false;
+  
+  // If 2 tiles, they must be adjacent
+  if (selectedCells.length === 2) {
+    return areAdjacent(selectedCells[0], selectedCells[1]);
+  }
+  
+  return true;
+}
+
+/**
+ * Handles selection/deselection of a cell by the human player
+ * @param {number} cellIndex - Index of the clicked cell
+ * @returns {boolean} True if selection changed
+ */
+function handleCellSelection(cellIndex) {
+  if (gameState.phase !== 'place') {
+    console.log('Not in placement phase');
+    return false;
+  }
+  
+  if (!gameState.players[gameState.currentPlayer - 1].isHuman) {
+    console.log('Not the human player\'s turn');
+    return false;
+  }
+  
+  if (!isCellEmpty(cellIndex)) {
+    console.log('Cell already occupied');
+    return false;
+  }
+  
+  const selectedIndex = gameState.selectedTiles.indexOf(cellIndex);
+  
+  if (selectedIndex > -1) {
+    // Deselect the cell
+    gameState.selectedTiles.splice(selectedIndex, 1);
+    console.log(`Cell ${cellIndex} deselected`);
+  } else {
+    // Check if we can select this cell
+    const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
     
-    // Generate 5 wheels
-    player.wheels = [];
-    for (let wheelIndex = 0; wheelIndex < 5; wheelIndex++) {
-      player.wheels.push(rollWheel(playerIndex, wheelIndex));
+    if (gameState.selectedTiles.length >= maxTiles) {
+      console.log(`Maximum ${maxTiles} tile(s) for turn ${gameState.currentTurn}`);
+      return false;
     }
-  }
-}
-
-/**
- * Executes the mandatory automatic reroll for the first turn
- */
-function executeFirstTurnAutoReroll() {
-  if (!gameState.firstTurnAutoReroll) return;
-  
-  console.log(`Automatic reroll for Turn 1 for Player ${gameState.currentPlayer}`);
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  // Reroll all unused wheels (all in turn 1)
-  for (let wheelIndex = 0; wheelIndex < 5; wheelIndex++) {
-    if (!currentPlayer.usedWheels.includes(wheelIndex)) {
-      currentPlayer.wheels[wheelIndex] = rollWheel(gameState.currentPlayer - 1, wheelIndex);
+    
+    // If it's the 2nd tile, check adjacency
+    if (gameState.selectedTiles.length === 1) {
+      if (!areAdjacent(gameState.selectedTiles[0], cellIndex)) {
+        console.log('Tiles must be adjacent');
+        return false;
+      }
     }
+    
+    // Select the cell
+    gameState.selectedTiles.push(cellIndex);
+    console.log(`Cell ${cellIndex} selected`);
   }
   
-  currentPlayer.rerollsUsed = 1; // Mark reroll as used
-  gameState.firstTurnAutoReroll = false;
-  gameState.phase = 'place'; // Go directly to placement phase
-  
-  console.log('New wheels after auto reroll:', currentPlayer.wheels);
+  return true;
 }
 
 /**
- * Checks if reroll is available for the current player
- * @returns {boolean} True if reroll possible
+ * Gets the available wheels for the current player
+ * @returns {object[]} Array of available wheels [{index, type}, ...]
  */
-function isRerollAvailable() {
+function getAvailableWheelsForPlacement() {
   const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  // No reroll in turn 1 (automatic)
-  if (gameState.currentTurn === 1) return false;
-  
-  // No reroll if already used
-  if (currentPlayer.rerollsUsed >= 1) return false;
-  
-  // No reroll if tiles are already selected for placement
-  if (gameState.selectedTiles.length > 0) return false;
-  
-  // Must have available wheels
-  const availableWheels = getAvailableWheels(gameState.currentPlayer - 1);
-  return availableWheels.length > 0;
-}
-
-/**
- * Gets the list of available (unused) wheels for a player
- * @param {number} playerIndex - Player index (0 or 1)
- * @returns {number[]} Array of indices of available wheels
- */
-function getAvailableWheels(playerIndex) {
-  const player = gameState.players[playerIndex];
   const availableWheels = [];
   
   for (let i = 0; i < 5; i++) {
-    if (!player.usedWheels.includes(i)) {
-      availableWheels.push(i);
+    if (!currentPlayer.usedWheels.includes(i)) {
+      availableWheels.push({
+        index: i,
+        type: currentPlayer.wheels[i]
+      });
     }
   }
   
@@ -191,190 +210,243 @@ function getAvailableWheels(playerIndex) {
 }
 
 /**
- * Executes the reroll of ALL available wheels (turns 2 and 3)
- * RULE: Reroll automatically shuffles all unused wheels
+ * Automatically selects wheels to use for placement
+ * @param {number} numTiles - Number of tiles to place
+ * @returns {object[]} Array of selected wheels [{index, type}, ...]
  */
-function executeReroll() {
+function selectWheelsForPlacement(numTiles) {
+  const availableWheels = getAvailableWheelsForPlacement();
+  
+  if (availableWheels.length < numTiles) {
+    console.log(`Not enough wheels available: ${availableWheels.length} < ${numTiles}`);
+    return [];
+  }
+  
+  // For now, take the first available wheels
+  // Later, let the player choose
+  return availableWheels.slice(0, numTiles);
+}
+
+/**
+ * Places the selected tiles on the board
+ * @returns {boolean} True if placement succeeded
+ */
+function placeTiles() {
+  if (gameState.phase !== 'place') {
+    console.log('Error: Not in placement phase');
+    return false;
+  }
+  
+  if (!isPlacementValid(gameState.selectedTiles)) {
+    console.log('Error: Invalid placement');
+    return false;
+  }
+  
+  const numTiles = gameState.selectedTiles.length;
+  const selectedWheels = selectWheelsForPlacement(numTiles);
+  
+  if (selectedWheels.length !== numTiles) {
+    console.log('Error: Cannot select required wheels');
+    return false;
+  }
+  
   const currentPlayer = gameState.players[gameState.currentPlayer - 1];
   
-  // Checks
-  if (!isRerollAvailable()) {
-    console.log('Error: Reroll not available');
-    return false;
-  }
+  console.log(`Placing ${numTiles} tile(s) for Player ${gameState.currentPlayer}`);
   
-  if (gameState.phase !== 'reroll') {
-    console.log('Error: Not in reroll phase');
-    return false;
-  }
-  
-  // Get all available (unused) wheels
-  const availableWheels = getAvailableWheels(gameState.currentPlayer - 1);
-  
-  if (availableWheels.length === 0) {
-    console.log('Error: No wheels available for reroll');
-    return false;
-  }
-  
-  // Automatically reroll ALL available wheels
-  console.log(`Automatic reroll of ${availableWheels.length} available wheels for Player ${gameState.currentPlayer}`);
-  
-  availableWheels.forEach(wheelIndex => {
-    const oldValue = currentPlayer.wheels[wheelIndex];
-    currentPlayer.wheels[wheelIndex] = rollWheel(gameState.currentPlayer - 1, wheelIndex);
-    console.log(`Wheel ${wheelIndex}: ${oldValue} → ${currentPlayer.wheels[wheelIndex]}`);
+  // Place each tile
+  gameState.selectedTiles.forEach((cellIndex, i) => {
+    const wheel = selectedWheels[i];
+    let tileType = wheel.type;
+    
+    // Special handling for ECLIPSE
+    if (wheel.type === 'ECLIPSE') {
+      // For AI, simple automatic choice
+      if (!currentPlayer.isHuman) {
+        const choices = ['ATK', 'HEX', 'WARD'];
+        tileType = choices[Math.floor(Math.random() * choices.length)];
+      } else {
+        // For human player, will prompt for choice in UI later
+        // For now, default to ATK
+        tileType = 'ATK';
+        console.log('ECLIPSE: Default choice ATK (to be implemented in UI)');
+      }
+      currentPlayer.eclipseUsed = true;
+    }
+    
+    // Create and place the tile
+    const tile = createTile(gameState.currentPlayer, tileType, wheel.index);
+    gameState.board[cellIndex] = tile;
+    
+    // Mark the wheel as used
+    currentPlayer.usedWheels.push(wheel.index);
+    
+    console.log(`Tile ${tileType} placed in cell ${cellIndex} (wheel ${wheel.index})`);
   });
   
-  currentPlayer.selectedWheels = []; // Clear all selection
-  currentPlayer.rerollsUsed = 1;
-  gameState.phase = 'place';
+  // Clear selections
+  gameState.selectedTiles = [];
   
+  console.log('Placement finished');
   return true;
 }
 
 /**
- * Simple AI: decides if it wants to reroll (turns 2 and 3)
+ * AI: Decides where to place its tiles (simple strategy)
  */
-function aiDecideReroll() {
-  const aiPlayer = gameState.players[1]; // Player 2 = AI
+function aiPlaceTiles() {
+  const availableWheels = getAvailableWheelsForPlacement();
   
-  if (gameState.currentTurn === 1) {
-    // Turn 1: automatic reroll already done
-    return;
+  if (availableWheels.length === 0) {
+    console.log('AI: No wheels available');
+    return false;
   }
   
-  if (!isRerollAvailable()) {
-    console.log('AI: Reroll not available, moving to placement');
-    gameState.phase = 'place';
-    return;
+  // Find all empty cells
+  const emptyCells = [];
+  for (let i = 0; i < 9; i++) {
+    if (isCellEmpty(i)) {
+      emptyCells.push(i);
+    }
   }
   
-  // Simple strategy: 40% chance to reroll
-  if (Math.random() < 0.4) {
-    console.log('AI decides to reroll');
-    executeReroll();
-  } else {
-    console.log('AI decides not to reroll');
-    gameState.phase = 'place';
+  if (emptyCells.length === 0) {
+    console.log('AI: No free cell');
+    return false;
   }
+  
+  // Simple strategy: random placement
+  const maxTiles = Math.min(
+    gameState.currentTurn === 3 ? 1 : 2,
+    availableWheels.length,
+    emptyCells.length
+  );
+  
+  // Select a first random cell
+  const firstCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  gameState.selectedTiles = [firstCell];
+  
+  // If can place a 2nd tile, look for an adjacent cell
+  if (maxTiles > 1 && gameState.currentTurn < 3) {
+    const adjacentCells = getAdjacentCells(firstCell).filter(cell => isCellEmpty(cell));
+    
+    if (adjacentCells.length > 0) {
+      const secondCell = adjacentCells[Math.floor(Math.random() * adjacentCells.length)];
+      gameState.selectedTiles.push(secondCell);
+    }
+  }
+  
+  console.log(`AI selects cells: [${gameState.selectedTiles.join(', ')}]`);
+  
+  // Place the tiles
+  return placeTiles();
 }
 
 /**
- * Goes directly to placement phase (without reroll)
+ * Checks if the current player can validate their turn
+ * @returns {boolean} True if validation is possible
  */
-function skipRerollToPlace() {
-  if (!isRerollAvailable() && gameState.phase === 'reroll') {
-    console.log('Reroll not available, automatically moving to placement');
-    gameState.phase = 'place';
-    return true;
-  }
+function canValidateTurn() {
+  if (gameState.phase !== 'place') return false;
   
-  if (gameState.phase === 'reroll' && gameState.currentTurn > 1) {
-    console.log('Player chooses not to reroll');
-    gameState.phase = 'place';
-    return true;
-  }
-  
-  return false;
-}
-
-/**
- * Starts a new turn
- */
-function startNewTurn() {
-  console.log(`\n=== TURN ${gameState.currentTurn} - PLAYER ${gameState.currentPlayer} ===`);
-  
+  // Must have placed at least one tile this turn
   const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  const tilesPlacedThisTurn = gameState.board.filter(tile => 
+    tile && tile.player === gameState.currentPlayer
+  ).length;
   
-  // Reset for the new turn
-  currentPlayer.selectedWheels = [];
-  currentPlayer.rerollsUsed = 0;
+  return tilesPlacedThisTurn > 0 || gameState.selectedTiles.length > 0;
+}
+
+/**
+ * Displays the board state
+ */
+function debugBoard() {
+  console.log('\n=== BOARD STATE ===');
+  console.log('Board 3x3:');
+  
+  for (let row = 0; row < 3; row++) {
+    let line = '';
+    for (let col = 0; col < 3; col++) {
+      const cellIndex = row * 3 + col;
+      const tile = gameState.board[cellIndex];
+      
+      if (tile) {
+        line += `P${tile.player}${tile.type.substring(0,1)} `;
+      } else {
+        line += '--- ';
+      }
+    }
+    console.log(`${row}: ${line}`);
+  }
+  
+  console.log(`Selected cells: [${gameState.selectedTiles.join(', ')}]`);
+  
+  const availableWheels = getAvailableWheelsForPlacement();
+  console.log(`Available wheels: ${availableWheels.length}`);
+  availableWheels.forEach(wheel => {
+    console.log(`  Wheel ${wheel.index}: ${wheel.type}`);
+  });
+}
+
+/**
+ * Starts the placement phase for the current player
+ */
+function startPlacementPhase() {
+  gameState.phase = 'place';
   gameState.selectedTiles = [];
   
-  if (gameState.currentTurn === 1) {
-    // Turn 1: mandatory automatic reroll
-    gameState.phase = 'reroll';
-    gameState.firstTurnAutoReroll = true;
-    executeFirstTurnAutoReroll();
+  console.log(`\n=== PLACEMENT PHASE - PLAYER ${gameState.currentPlayer} ===`);
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+  
+  console.log(`Can place up to ${maxTiles} tile(s)`);
+  
+  if (currentPlayer.isHuman) {
+    console.log('Waiting for human player selection...');
+    debugBoard();
   } else {
-    // Turns 2 and 3: optional reroll
-    gameState.phase = 'reroll';
-    
-    if (currentPlayer.isHuman) {
-      console.log('Human player turn - waiting for reroll decision');
-    } else {
-      // AI makes its decision automatically
-      setTimeout(() => aiDecideReroll(), 500); // Small delay for simulation
-    }
+    console.log('AI is thinking...');
+    setTimeout(() => {
+      aiPlaceTiles();
+      debugBoard();
+    }, 1000);
   }
-}
-
-/**
- * Initializes the complete game
- */
-function initGame() {
-  console.log('🌙 Initializing Night Dealer...');
-  
-  // Global reset
-  gameState.currentRound = 1;
-  gameState.currentTurn = 1;
-  gameState.scores = [0, 0];
-  gameState.gameOver = false;
-  
-  // Start the first round
-  initNewRound();
-}
-
-/**
- * Displays the game state with focus on rerolls
- */
-function debugRerollState() {
-  console.log('\n=== REROLL STATE ===');
-  console.log(`Round ${gameState.currentRound}, Turn ${gameState.currentTurn}, Phase: ${gameState.phase}`);
-  console.log(`Current player: ${gameState.currentPlayer} (${gameState.players[gameState.currentPlayer - 1].isHuman ? 'Human' : 'AI'})`);
-  console.log(`Reroll available: ${isRerollAvailable()}`);
-  
-  gameState.players.forEach((player, index) => {
-    console.log(`\nPlayer ${index + 1}:`);
-    if (index === 0 || !player.isHuman) { // Show wheels for human player or in debug
-      console.log(`  Wheels: ${player.wheels.join(', ')}`);
-    } else {
-      console.log(`  Wheels: [HIDDEN - AI]`);
-    }
-    console.log(`  Used wheels: [${player.usedWheels.join(', ')}] (${5 - player.usedWheels.length} available)`);
-    console.log(`  Rerolls: ${player.rerollsUsed}/1`);
-    console.log(`  Eclipse used: ${player.eclipseUsed}`);
-  });
-  
-  console.log(`\nCurrent selections:`);
-  console.log(`  Selected tiles: [${gameState.selectedTiles.join(', ')}]`);
 }
 
 // ===== EXPORTS AND TESTS =====
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    gameState, initGame, executeReroll, skipRerollToPlace, isRerollAvailable,
-    getAvailableWheels, startNewTurn, debugRerollState, TILE_TYPES, TILE_ICONS
+    gameState, handleCellSelection, placeTiles, canValidateTurn,
+    isPlacementValid, areAdjacent, getAdjacentCells, startPlacementPhase,
+    debugBoard, TILE_TYPES, TILE_ICONS, createTile
   };
 } else {
-  // Automatic test
+  // Placement test
   document.addEventListener('DOMContentLoaded', () => {
-    initGame();
-    debugRerollState();
+    // Simulate state after reroll
+    gameState.currentPlayer = 1;
+    gameState.currentTurn = 2;
+    gameState.phase = 'place';
+    gameState.players[0].wheels = ['ATK', 'HEX', 'WARD', 'ATK', 'ECLIPSE'];
+    gameState.players[0].usedWheels = [0]; // One wheel already used
     
-    // Simulation of a complete cycle
+    console.log('🎮 Placement test - Player 1, Turn 2');
+    startPlacementPhase();
+    
+    // Selection test
     setTimeout(() => {
-      console.log('\n--- SIMULATION MOVE TO TURN 2 ---');
-      gameState.currentTurn = 2;
-      gameState.currentPlayer = 1; // Human player
-      gameState.players[0].usedWheels = [0, 1]; // Simulate 2 used wheels
-      startNewTurn();
+      console.log('\n--- Test select cells 0 and 1 (adjacent) ---');
+      handleCellSelection(0);
+      handleCellSelection(1);
+      debugBoard();
+      
       setTimeout(() => {
-        debugRerollState();
-        console.log('\n--- TEST REROLL WITH 3 AVAILABLE WHEELS ---');
-        if (isRerollAvailable()) {
-          executeReroll();
-          debugRerollState();
+        console.log('\n--- Test placement ---');
+        if (canValidateTurn()) {
+          placeTiles();
+          debugBoard();
         }
       }, 1000);
     }, 2000);
