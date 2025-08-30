@@ -17,7 +17,7 @@ const gameState = {
   currentRound: 1,
   currentTurn: 1,
   scores: [0, 0],
-  board: Array(9).fill(null), // Each cell contains null or a tile object
+  board: Array(9).fill(null),
   
   players: [
     {
@@ -40,65 +40,49 @@ const gameState = {
     }
   ],
   
-  // Placement management
-  selectedTiles: [],        // Selected cells for placement [cellIndex, ...]
-  selectedWheels: [],       // Wheels selected for these placements [wheelIndex, ...]
-  phase: 'reroll',         // 'reroll' or 'place'
-  gameOver: false,
+  // New placement workflow
+  placementState: {
+    selectedWheel: null,        // Index of selected wheel (-1 if none)
+    pendingPlacements: [],      // [{wheelIndex, cellIndex, tileType}, ...]
+    tilesPlacedThisTurn: 0,    // Number of tiles placed this turn
+    canPlaceSecond: false,      // Can place a 2nd tile?
+    adjacentHighlighted: []     // Highlighted adjacent cells
+  },
   
-  traps: [],               // Active traps [{player, cell, type}]
-  pendingCurses: [],       // Pending curses
+  phase: 'reroll',
+  gameOver: false,
+  traps: [],
+  pendingCurses: [],
   firstTurnAutoReroll: true
 };
 
-// Structure of a tile on the board
+// Tile structure
 const createTile = (player, type, wheelIndex) => ({
-  player: player,          // 1 or 2
-  type: type,              // ATK, HEX, WARD, ECLIPSE
-  wheelIndex: wheelIndex,  // Index of the wheel used
-  shields: 0,              // Number of shields
-  cursed: false,           // Curse marker
-  trapToken: null          // Associated trap token
+  player: player,
+  type: type,
+  wheelIndex: wheelIndex,
+  shields: 0,
+  cursed: false,
+  trapToken: null
 });
 
-// ===== PLACEMENT FUNCTIONS =====
+// ===== UTILITY FUNCTIONS =====
 
-/**
- * Checks if a cell can receive a tile
- * @param {number} cellIndex - Cell index (0-8)
- * @returns {boolean} True if placement is valid
- */
-function isCellEmpty(cellIndex) {
-  return cellIndex >= 0 && cellIndex < 9 && gameState.board[cellIndex] === null;
-}
-
-/**
- * Checks if two cells are orthogonally adjacent
- * @param {number} cellA - Index cell A
- * @param {number} cellB - Index cell B  
- * @returns {boolean} True if adjacent
- */
 function areAdjacent(cellA, cellB) {
   const rowA = Math.floor(cellA / 3);
   const colA = cellA % 3;
   const rowB = Math.floor(cellB / 3);
   const colB = cellB % 3;
   
-  return (Math.abs(rowA - rowB) === 1 && colA === colB) ||
+  return (Math.abs(rowA - rowB) === 1 && colA === colA) ||
        (Math.abs(colA - colB) === 1 && rowA === rowB);
 }
 
-/**
- * Gets the cells adjacent to a given position
- * @param {number} cellIndex - Cell index
- * @returns {number[]} Array of adjacent cells
- */
 function getAdjacentCells(cellIndex) {
   const row = Math.floor(cellIndex / 3);
   const col = cellIndex % 3;
   const adjacent = [];
   
-  // Checks the 4 directions: North, East, South, West
   const directions = [[-1, 0], [0, 1], [1, 0], [0, -1]];
   
   directions.forEach(([deltaRow, deltaCol]) => {
@@ -113,342 +97,529 @@ function getAdjacentCells(cellIndex) {
   return adjacent;
 }
 
-/**
- * Checks if a tile placement is valid according to the rules
- * @param {number[]} selectedCells - Selected cells
- * @returns {boolean} True if placement is valid
- */
-function isPlacementValid(selectedCells) {
-  // Must have at least one tile
-  if (selectedCells.length === 0) return false;
+function isCellEmpty(cellIndex) {
+  // Checks if the cell is empty AND not already in pending placements
+  if (gameState.board[cellIndex] !== null) return false;
   
-  // Maximum according to the turn (T1-T2: 2 tiles, T3: 1 tile)
-  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
-  if (selectedCells.length > maxTiles) return false;
-  
-  // All cells must be empty
-  if (!selectedCells.every(cell => isCellEmpty(cell))) return false;
-  
-  // If 2 tiles, they must be adjacent
-  if (selectedCells.length === 2) {
-    return areAdjacent(selectedCells[0], selectedCells[1]);
-  }
-  
-  return true;
+  return !gameState.placementState.pendingPlacements.some(
+    placement => placement.cellIndex === cellIndex
+  );
 }
 
+// ===== NEW PLACEMENT WORKFLOW =====
+
 /**
- * Handles selection/deselection of a cell by the human player
- * @param {number} cellIndex - Index of the clicked cell
- * @returns {boolean} True if selection changed
+ * STEP 1: Player selects a wheel
+ * @param {number} wheelIndex - Wheel index (0-4)
+ * @returns {boolean} True if selection successful
  */
-function handleCellSelection(cellIndex) {
+function selectWheel(wheelIndex) {
   if (gameState.phase !== 'place') {
     console.log('Not in placement phase');
     return false;
   }
   
-  if (!gameState.players[gameState.currentPlayer - 1].isHuman) {
-    console.log('Not the human player\'s turn');
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  if (!currentPlayer.isHuman) {
+    console.log('It is not the human player\'s turn');
+    return false;
+  }
+  
+  if (currentPlayer.usedWheels.includes(wheelIndex)) {
+    console.log('This wheel is already used');
+    return false;
+  }
+  
+  // Checks if this wheel is already in pending placement
+  if (gameState.placementState.pendingPlacements.some(p => p.wheelIndex === wheelIndex)) {
+    console.log('This wheel is already selected for placement');
+    return false;
+  }
+  
+  // Selects the wheel
+  gameState.placementState.selectedWheel = wheelIndex;
+  console.log(`Wheel ${wheelIndex} selected (${currentPlayer.wheels[wheelIndex]})`);
+  
+  return true;
+}
+
+/**
+ * STEP 2: Place the selected wheel on a cell
+ * @param {number} cellIndex - Cell index (0-8)
+ * @returns {boolean} True if placement successful
+ */
+function placeSelectedWheel(cellIndex) {
+  if (gameState.phase !== 'place') {
+    console.log('Not in placement phase');
+    return false;
+  }
+  
+  if (gameState.placementState.selectedWheel === null) {
+    console.log('No wheel selected');
     return false;
   }
   
   if (!isCellEmpty(cellIndex)) {
-    console.log('Cell already occupied');
+    console.log('Cell not available');
     return false;
   }
   
-  const selectedIndex = gameState.selectedTiles.indexOf(cellIndex);
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  const wheelIndex = gameState.placementState.selectedWheel;
+  let tileType = currentPlayer.wheels[wheelIndex];
   
-  if (selectedIndex > -1) {
-    // Deselect the cell
-    gameState.selectedTiles.splice(selectedIndex, 1);
-    console.log(`Cell ${cellIndex} deselected`);
-  } else {
-    // Check if we can select this cell
-    const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
-    
-    if (gameState.selectedTiles.length >= maxTiles) {
-      console.log(`Maximum ${maxTiles} tile(s) for turn ${gameState.currentTurn}`);
+  // ECLIPSE handling (currently defaults to ATK)
+  if (tileType === 'ECLIPSE') {
+    tileType = 'ATK'; // TODO: Choice interface
+    console.log('ECLIPSE converted to ATK (default choice)');
+  }
+  
+  // Checks adjacency if it's the 2nd tile
+  if (gameState.placementState.pendingPlacements.length === 1) {
+    const firstPlacement = gameState.placementState.pendingPlacements[0];
+    if (!areAdjacent(firstPlacement.cellIndex, cellIndex)) {
+      console.log('The 2nd tile must be adjacent to the first');
       return false;
     }
-    
-    // If it's the 2nd tile, check adjacency
-    if (gameState.selectedTiles.length === 1) {
-      if (!areAdjacent(gameState.selectedTiles[0], cellIndex)) {
-        console.log('Tiles must be adjacent');
-        return false;
-      }
-    }
-    
-    // Select the cell
-    gameState.selectedTiles.push(cellIndex);
-    console.log(`Cell ${cellIndex} selected`);
   }
+  
+  // Creates the pending placement
+  const placement = {
+    wheelIndex: wheelIndex,
+    cellIndex: cellIndex,
+    tileType: tileType
+  };
+  
+  gameState.placementState.pendingPlacements.push(placement);
+  gameState.placementState.selectedWheel = null; // Deselects the wheel
+  
+  console.log(`Pending placement: ${tileType} on cell ${cellIndex}`);
+  
+  // Temporarily displays the tile on the board (for preview)
+  gameState.board[cellIndex] = createTile(gameState.currentPlayer, tileType, wheelIndex);
+  
+  // Checks if a 2nd tile can be placed
+  updateSecondTilePlacement();
   
   return true;
 }
 
 /**
- * Gets the available wheels for the current player
- * @returns {object[]} Array of available wheels [{index, type}, ...]
+ * Updates state for 2nd tile placement
  */
-function getAvailableWheelsForPlacement() {
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  const availableWheels = [];
+function updateSecondTilePlacement() {
+  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+  const currentPlacements = gameState.placementState.pendingPlacements.length;
   
-  for (let i = 0; i < 5; i++) {
-    if (!currentPlayer.usedWheels.includes(i)) {
-      availableWheels.push({
-        index: i,
-        type: currentPlayer.wheels[i]
-      });
-    }
-  }
-  
-  return availableWheels;
-}
-
-/**
- * Automatically selects wheels to use for placement
- * @param {number} numTiles - Number of tiles to place
- * @returns {object[]} Array of selected wheels [{index, type}, ...]
- */
-function selectWheelsForPlacement(numTiles) {
-  const availableWheels = getAvailableWheelsForPlacement();
-  
-  if (availableWheels.length < numTiles) {
-    console.log(`Not enough wheels available: ${availableWheels.length} < ${numTiles}`);
-    return [];
-  }
-  
-  // For now, take the first available wheels
-  // Later, let the player choose
-  return availableWheels.slice(0, numTiles);
-}
-
-/**
- * Places the selected tiles on the board
- * @returns {boolean} True if placement succeeded
- */
-function placeTiles() {
-  if (gameState.phase !== 'place') {
-    console.log('Error: Not in placement phase');
-    return false;
-  }
-  
-  if (!isPlacementValid(gameState.selectedTiles)) {
-    console.log('Error: Invalid placement');
-    return false;
-  }
-  
-  const numTiles = gameState.selectedTiles.length;
-  const selectedWheels = selectWheelsForPlacement(numTiles);
-  
-  if (selectedWheels.length !== numTiles) {
-    console.log('Error: Cannot select required wheels');
-    return false;
-  }
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  console.log(`Placing ${numTiles} tile(s) for Player ${gameState.currentPlayer}`);
-  
-  // Place each tile
-  gameState.selectedTiles.forEach((cellIndex, i) => {
-    const wheel = selectedWheels[i];
-    let tileType = wheel.type;
+  if (currentPlacements === 1 && maxTiles === 2) {
+    // Can place a 2nd tile - highlights adjacent cells
+    const firstPlacement = gameState.placementState.pendingPlacements[0];
+    const adjacentCells = getAdjacentCells(firstPlacement.cellIndex);
     
-    // Special handling for ECLIPSE
-    if (wheel.type === 'ECLIPSE') {
-      // For AI, simple automatic choice
-      if (!currentPlayer.isHuman) {
-        const choices = ['ATK', 'HEX', 'WARD'];
-        tileType = choices[Math.floor(Math.random() * choices.length)];
-      } else {
-        // For human player, will prompt for choice in UI later
-        // For now, default to ATK
-        tileType = 'ATK';
-        console.log('ECLIPSE: Default choice ATK (to be implemented in UI)');
-      }
+    gameState.placementState.adjacentHighlighted = adjacentCells.filter(cell => isCellEmpty(cell));
+    gameState.placementState.canPlaceSecond = true;
+    
+    console.log(`Available adjacent cells: [${gameState.placementState.adjacentHighlighted.join(', ')}]`);
+  } else {
+    // Cannot place additional tile
+    gameState.placementState.adjacentHighlighted = [];
+    gameState.placementState.canPlaceSecond = false;
+  }
+}
+
+/**
+ * Cancels the last pending placement
+ * @returns {boolean} True if cancellation successful
+ */
+function cancelLastPlacement() {
+  if (gameState.placementState.pendingPlacements.length === 0) {
+    console.log('No placement to cancel');
+    return false;
+  }
+  
+  // Gets the last placement
+  const lastPlacement = gameState.placementState.pendingPlacements.pop();
+  
+  // Removes the tile from the board (preview)
+  gameState.board[lastPlacement.cellIndex] = null;
+  
+  console.log(`Placement cancelled: ${lastPlacement.tileType} from cell ${lastPlacement.cellIndex}`);
+  
+  // Updates 2nd placement state
+  updateSecondTilePlacement();
+  
+  return true;
+}
+
+/**
+ * Cancels all pending placements
+ */
+function cancelAllPlacements() {
+  console.log('Cancelling all placements');
+  
+  // Removes all preview tiles
+  gameState.placementState.pendingPlacements.forEach(placement => {
+    gameState.board[placement.cellIndex] = null;
+  });
+  
+  // Reset placement state
+  gameState.placementState.pendingPlacements = [];
+  gameState.placementState.selectedWheel = null;
+  gameState.placementState.adjacentHighlighted = [];
+  gameState.placementState.canPlaceSecond = false;
+}
+
+/**
+ * Validates all pending placements
+ * @returns {boolean} True if validation successful
+ */
+function validatePlacements() {
+  if (gameState.placementState.pendingPlacements.length === 0) {
+    console.log('No placement to validate');
+    return false;
+  }
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  console.log(`Validating ${gameState.placementState.pendingPlacements.length} placement(s)`);
+  
+  // Confirms all placements
+  gameState.placementState.pendingPlacements.forEach(placement => {
+    // Marks the wheel as used
+    currentPlayer.usedWheels.push(placement.wheelIndex);
+    
+    // Marks ECLIPSE as used if applicable
+    if (currentPlayer.wheels[placement.wheelIndex] === 'ECLIPSE') {
       currentPlayer.eclipseUsed = true;
     }
     
-    // Create and place the tile
-    const tile = createTile(gameState.currentPlayer, tileType, wheel.index);
-    gameState.board[cellIndex] = tile;
-    
-    // Mark the wheel as used
-    currentPlayer.usedWheels.push(wheel.index);
-    
-    console.log(`Tile ${tileType} placed in cell ${cellIndex} (wheel ${wheel.index})`);
+    console.log(`✓ ${placement.tileType} validated on cell ${placement.cellIndex} (wheel ${placement.wheelIndex})`);
   });
   
-  // Clear selections
-  gameState.selectedTiles = [];
+  // Tiles are already on the board (preview), no need to place again
   
-  console.log('Placement finished');
+  // Reset placement state
+  gameState.placementState.pendingPlacements = [];
+  gameState.placementState.selectedWheel = null;
+  gameState.placementState.adjacentHighlighted = [];
+  gameState.placementState.canPlaceSecond = false;
+  
   return true;
 }
 
 /**
- * AI: Decides where to place its tiles (simple strategy)
- */
-function aiPlaceTiles() {
-  const availableWheels = getAvailableWheelsForPlacement();
-  
-  if (availableWheels.length === 0) {
-    console.log('AI: No wheels available');
-    return false;
-  }
-  
-  // Find all empty cells
-  const emptyCells = [];
-  for (let i = 0; i < 9; i++) {
-    if (isCellEmpty(i)) {
-      emptyCells.push(i);
-    }
-  }
-  
-  if (emptyCells.length === 0) {
-    console.log('AI: No free cell');
-    return false;
-  }
-  
-  // Simple strategy: random placement
-  const maxTiles = Math.min(
-    gameState.currentTurn === 3 ? 1 : 2,
-    availableWheels.length,
-    emptyCells.length
-  );
-  
-  // Select a first random cell
-  const firstCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
-  gameState.selectedTiles = [firstCell];
-  
-  // If can place a 2nd tile, look for an adjacent cell
-  if (maxTiles > 1 && gameState.currentTurn < 3) {
-    const adjacentCells = getAdjacentCells(firstCell).filter(cell => isCellEmpty(cell));
-    
-    if (adjacentCells.length > 0) {
-      const secondCell = adjacentCells[Math.floor(Math.random() * adjacentCells.length)];
-      gameState.selectedTiles.push(secondCell);
-    }
-  }
-  
-  console.log(`AI selects cells: [${gameState.selectedTiles.join(', ')}]`);
-  
-  // Place the tiles
-  return placeTiles();
-}
-
-/**
- * Checks if the current player can validate their turn
- * @returns {boolean} True if validation is possible
+ * Checks if the player can validate their turn
+ * @returns {boolean} True if validation possible
  */
 function canValidateTurn() {
-  if (gameState.phase !== 'place') return false;
-  
-  // Must have placed at least one tile this turn
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  const tilesPlacedThisTurn = gameState.board.filter(tile => 
-    tile && tile.player === gameState.currentPlayer
-  ).length;
-  
-  return tilesPlacedThisTurn > 0 || gameState.selectedTiles.length > 0;
+  // Must have at least one pending placement
+  return gameState.placementState.pendingPlacements.length > 0;
 }
 
+// ===== TURN MANAGEMENT =====
+
 /**
- * Displays the board state
+ * Moves to next player/turn
  */
-function debugBoard() {
-  console.log('\n=== BOARD STATE ===');
-  console.log('Board 3x3:');
+function nextPlayer() {
+  console.log(`\n=== END OF PLAYER ${gameState.currentPlayer} TURN ===`);
   
-  for (let row = 0; row < 3; row++) {
-    let line = '';
-    for (let col = 0; col < 3; col++) {
-      const cellIndex = row * 3 + col;
-      const tile = gameState.board[cellIndex];
-      
-      if (tile) {
-        line += `P${tile.player}${tile.type.substring(0,1)} `;
-      } else {
-        line += '--- ';
-      }
+  if (gameState.currentPlayer === 1) {
+    // Move to player 2
+    gameState.currentPlayer = 2;
+  } else {
+    // Move to next turn
+    gameState.currentPlayer = 1;
+    gameState.currentTurn++;
+    
+    if (gameState.currentTurn > 3) {
+      endRound();
+      return;
     }
-    console.log(`${row}: ${line}`);
   }
   
-  console.log(`Selected cells: [${gameState.selectedTiles.join(', ')}]`);
-  
-  const availableWheels = getAvailableWheelsForPlacement();
-  console.log(`Available wheels: ${availableWheels.length}`);
-  availableWheels.forEach(wheel => {
-    console.log(`  Wheel ${wheel.index}: ${wheel.type}`);
-  });
+  startNewTurn();
 }
 
 /**
- * Starts the placement phase for the current player
+ * Starts a new turn
+ */
+function startNewTurn() {
+  console.log(`\n=== START TURN ${gameState.currentTurn} - PLAYER ${gameState.currentPlayer} ===`);
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  // Reset for new turn
+  currentPlayer.selectedWheels = [];
+  currentPlayer.rerollsUsed = 0;
+  
+  // Reset placement state
+  gameState.placementState = {
+    selectedWheel: null,
+    pendingPlacements: [],
+    tilesPlacedThisTurn: 0,
+    canPlaceSecond: false,
+    adjacentHighlighted: []
+  };
+  
+  if (gameState.currentTurn === 1) {
+    // Turn 1: auto reroll
+    gameState.phase = 'reroll';
+    gameState.firstTurnAutoReroll = true;
+    executeFirstTurnAutoReroll(); // This function should be imported/redefined
+  } else {
+    // Turns 2-3: optional reroll phase
+    gameState.phase = 'reroll';
+    
+    if (currentPlayer.isHuman) {
+      console.log('Human player - Optional reroll phase');
+    } else {
+      // AI decides automatically
+      setTimeout(() => aiDecideReroll(), 500);
+    }
+  }
+}
+
+/**
+ * Ends the current round
+ */
+function endRound() {
+  console.log(`\n=== END OF ROUND ${gameState.currentRound} ===`);
+  
+  // Counts tiles controlled by each player
+  const p1Tiles = gameState.board.filter(tile => tile && tile.player === 1).length;
+  const p2Tiles = gameState.board.filter(tile => tile && tile.player === 2).length;
+  
+  gameState.scores[0] += p1Tiles;
+  gameState.scores[1] += p2Tiles;
+  
+  console.log(`Points this round: P1=${p1Tiles}, P2=${p2Tiles}`);
+  console.log(`Total scores: P1=${gameState.scores[0]}, P2=${gameState.scores[1]}`);
+  
+  // Checks end conditions
+  if (gameState.scores[0] >= 9 || gameState.scores[1] >= 9 || gameState.currentRound >= 3) {
+    endGame();
+    return;
+  }
+  
+  // Prepare next round
+  gameState.currentRound++;
+  gameState.currentTurn = 1;
+  gameState.currentPlayer = 1; // P1 always starts new rounds
+  
+  // Reset board
+  gameState.board = Array(9).fill(null);
+  gameState.traps = [];
+  gameState.pendingCurses = [];
+  
+  // Reset players for new round
+  gameState.players.forEach(player => {
+    player.selectedWheels = [];
+    player.usedWheels = [];
+    player.rerollsUsed = 0;
+    player.eclipseUsed = false;
+    player.omenUsed = false;
+    
+    // Regenerate wheels
+    player.wheels = [];
+    for (let i = 0; i < 5; i++) {
+      player.wheels.push(rollWheel(gameState.players.indexOf(player), i));
+    }
+  });
+  
+  startNewRound();
+}
+
+/**
+ * Ends the game
+ */
+function endGame() {
+  console.log('\n=== END OF GAME ===');
+  
+  gameState.gameOver = true;
+  
+  if (gameState.scores[0] > gameState.scores[1]) {
+    console.log(`🏆 Player 1 wins with ${gameState.scores[0]} points!`);
+  } else if (gameState.scores[1] > gameState.scores[0]) {
+    console.log(`🏆 Player 2 wins with ${gameState.scores[1]} points!`);
+  } else {
+    console.log(`🤝 Tie with ${gameState.scores[0]} points each!`);
+  }
+}
+
+// ===== SIMPLE AI =====
+
+/**
+ * AI: Automatically places its tiles
+ */
+function aiPlaceTiles() {
+  const availableWheels = [];
+  for (let i = 0; i < 5; i++) {
+    if (!gameState.players[1].usedWheels.includes(i)) {
+      availableWheels.push(i);
+    }
+  }
+  
+  if (availableWheels.length === 0) return false;
+  
+  // Finds all empty cells
+  const emptyCells = [];
+  for (let i = 0; i < 9; i++) {
+    if (isCellEmpty(i)) emptyCells.push(i);
+  }
+  
+  if (emptyCells.length === 0) return false;
+  
+  // Place the first tile
+  const firstWheel = availableWheels[0];
+  const firstCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+  
+  gameState.placementState.selectedWheel = firstWheel;
+  placeSelectedWheel(firstCell);
+  
+  // Try to place a 2nd tile if possible
+  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+  if (maxTiles > 1 && availableWheels.length > 1 && gameState.placementState.adjacentHighlighted.length > 0) {
+    const secondWheel = availableWheels[1];
+    const adjacentOptions = gameState.placementState.adjacentHighlighted;
+    const secondCell = adjacentOptions[Math.floor(Math.random() * adjacentOptions.length)];
+    
+    gameState.placementState.selectedWheel = secondWheel;
+    placeSelectedWheel(secondCell);
+  }
+  
+  // Automatically validate
+  setTimeout(() => {
+    validatePlacements();
+    setTimeout(() => nextPlayer(), 500);
+  }, 1000);
+  
+  return true;
+}
+
+/**
+ * Starts the placement phase
  */
 function startPlacementPhase() {
   gameState.phase = 'place';
-  gameState.selectedTiles = [];
-  
   console.log(`\n=== PLACEMENT PHASE - PLAYER ${gameState.currentPlayer} ===`);
   
   const currentPlayer = gameState.players[gameState.currentPlayer - 1];
   const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
   
   console.log(`Can place up to ${maxTiles} tile(s)`);
+  console.log('Workflow: 1) Select a wheel, 2) Select a cell');
   
-  if (currentPlayer.isHuman) {
-    console.log('Waiting for human player selection...');
-    debugBoard();
-  } else {
-    console.log('AI is thinking...');
-    setTimeout(() => {
-      aiPlaceTiles();
-      debugBoard();
-    }, 1000);
+  if (!currentPlayer.isHuman) {
+    console.log('AI is playing...');
+    setTimeout(() => aiPlaceTiles(), 1000);
   }
+}
+
+// ===== HELPERS (to import from previous steps) =====
+
+function rollWheel(playerIndex, wheelIndex) {
+  const player = gameState.players[playerIndex];
+  const availableTypes = ['ATK', 'HEX', 'WARD'];
+  
+  if (!player.eclipseUsed && Math.random() < ECLIPSE_PROBABILITY) {
+    availableTypes.push('ECLIPSE');
+  }
+  
+  return availableTypes[Math.floor(Math.random() * availableTypes.length)];
+}
+
+function executeFirstTurnAutoReroll() {
+  if (!gameState.firstTurnAutoReroll) return;
+  
+  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
+  
+  for (let i = 0; i < 5; i++) {
+    if (!currentPlayer.usedWheels.includes(i)) {
+      currentPlayer.wheels[i] = rollWheel(gameState.currentPlayer - 1, i);
+    }
+  }
+  
+  currentPlayer.rerollsUsed = 1;
+  gameState.firstTurnAutoReroll = false;
+  startPlacementPhase();
+}
+
+function aiDecideReroll() {
+  // Simplified implementation - to be completed with step 2 logic
+  console.log('AI decides not to reroll');
+  startPlacementPhase();
+}
+
+function startNewRound() {
+  startNewTurn();
+}
+
+// ===== DEBUG =====
+
+function debugPlacementState() {
+  console.log('\n=== PLACEMENT STATE ===');
+  console.log(`Phase: ${gameState.phase}`);
+  console.log(`Current player: ${gameState.currentPlayer}`);
+  console.log(`Selected wheel: ${gameState.placementState.selectedWheel}`);
+  console.log(`Pending placements: ${gameState.placementState.pendingPlacements.length}`);
+  
+  gameState.placementState.pendingPlacements.forEach((placement, i) => {
+    console.log(`  ${i+1}. Wheel ${placement.wheelIndex} (${placement.tileType}) → Cell ${placement.cellIndex}`);
+  });
+  
+  console.log(`Adjacent cells: [${gameState.placementState.adjacentHighlighted.join(', ')}]`);
+  console.log(`Can validate: ${canValidateTurn()}`);
 }
 
 // ===== EXPORTS AND TESTS =====
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    gameState, handleCellSelection, placeTiles, canValidateTurn,
-    isPlacementValid, areAdjacent, getAdjacentCells, startPlacementPhase,
-    debugBoard, TILE_TYPES, TILE_ICONS, createTile
+    gameState, selectWheel, placeSelectedWheel, cancelLastPlacement,
+    cancelAllPlacements, validatePlacements, canValidateTurn, nextPlayer,
+    startPlacementPhase, debugPlacementState, TILE_TYPES, TILE_ICONS
   };
 } else {
-  // Placement test
+  // Test the new workflow
   document.addEventListener('DOMContentLoaded', () => {
-    // Simulate state after reroll
+    // Simulate a game state
     gameState.currentPlayer = 1;
     gameState.currentTurn = 2;
-    gameState.phase = 'place';
-    gameState.players[0].wheels = ['ATK', 'HEX', 'WARD', 'ATK', 'ECLIPSE'];
-    gameState.players[0].usedWheels = [0]; // One wheel already used
+    gameState.players[0].wheels = ['ATK', 'HEX', 'WARD', 'ECLIPSE', 'ATK'];
+    gameState.players[0].usedWheels = [0]; // One wheel used
     
-    console.log('🎮 Placement test - Player 1, Turn 2');
+    console.log('🎮 Test of the new placement workflow');
     startPlacementPhase();
     
-    // Selection test
+    // Simulate player actions
     setTimeout(() => {
-      console.log('\n--- Test select cells 0 and 1 (adjacent) ---');
-      handleCellSelection(0);
-      handleCellSelection(1);
-      debugBoard();
+      console.log('\n--- Test: Select wheel 1 (HEX) ---');
+      selectWheel(1);
+      debugPlacementState();
       
       setTimeout(() => {
-        console.log('\n--- Test placement ---');
-        if (canValidateTurn()) {
-          placeTiles();
-          debugBoard();
-        }
+        console.log('\n--- Test: Place on cell 4 (center) ---');
+        placeSelectedWheel(4);
+        debugPlacementState();
+        
+        setTimeout(() => {
+          console.log('\n--- Test: Select wheel 2 (WARD) for 2nd tile ---');
+          selectWheel(2);
+          
+          setTimeout(() => {
+            console.log('\n--- Test: Place on adjacent cell 3 ---');
+            placeSelectedWheel(3);
+            debugPlacementState();
+            
+            setTimeout(() => {
+              console.log('\n--- Test: Validate placements ---');
+              validatePlacements();
+              debugPlacementState();
+            }, 1000);
+          }, 1000);
+        }, 1000);
       }, 1000);
-    }, 2000);
+    }, 1000);
   });
 }
