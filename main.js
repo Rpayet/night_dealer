@@ -1,6 +1,4 @@
 // NIGHT DEALER
-
-// ===== CONSTANTS =====
 const TILE_TYPES = {
   ATK: 'ATK', HEX: 'HEX', WARD: 'WARD', ECLIPSE: 'ECLIPSE'
 };
@@ -9,1180 +7,899 @@ const TILE_ICONS = {
   ATK: '⚔️', HEX: '👁️', WARD: '🛡️', ECLIPSE: '🌙'
 };
 
-const ECLIPSE_PROBABILITY = 0.2;
-
-// RPS Triangle: ATK > HEX > WARD > ATK
-const COMBAT_RULES = {
-  ATK: { beats: 'HEX', losesTo: 'WARD' },
-  HEX: { beats: 'WARD', losesTo: 'ATK' },
-  WARD: { beats: 'ATK', losesTo: 'HEX' }
-};
-
-// HEX modes
 const HEX_MODES = {
   CURSE: 'curse',
   TRAP: 'trap'
 };
 
-// ===== GAME STATE =====
-const gameState = {
+// Simplified game state for UI
+let gameState = {
   currentPlayer: 1,
   currentRound: 1,
   currentTurn: 1,
   scores: [0, 0],
   board: Array(9).fill(null),
-  
   players: [
     {
-      wheels: [],
-      selectedWheels: [],
+      wheels: ['ATK', 'HEX', 'WARD', 'ATK', 'HEX'],
       usedWheels: [],
       rerollsUsed: 0,
       eclipseUsed: false,
-      omenUsed: false,
       isHuman: true
     },
     {
-      wheels: [],
-      selectedWheels: [],
+      wheels: ['WARD', 'ATK', 'HEX', 'WARD', 'ATK'],
       usedWheels: [],
       rerollsUsed: 0,
       eclipseUsed: false,
-      omenUsed: false,
       isHuman: false
     }
   ],
-  
-  // Placement workflow
   placementState: {
     selectedWheel: null,
     pendingPlacements: [],
-    tilesPlacedThisTurn: 0,
-    canPlaceSecond: false,
     adjacentHighlighted: [],
-    
-    // Special effects state
-    awaitingWardTarget: null,        // {tileCell: number, availableTargets: number[]}
-    awaitingHexChoice: null,         // {tileCell: number, curseTargets: number[], trapTargets: number[]}
-    awaitingEclipseChoice: null,     // {tileCell: number, wheelIndex: number}
-    
-    // Applied effects (reversible before validation)
-    wardTargets: [],                 // [{wardCell, targetCell}, ...]
-    hexChoices: [],                  // [{hexCell, mode: 'curse'|'trap', targetCell}, ...]
-    eclipseChoices: []               // [{eclipseCell, wheelIndex, chosenType}, ...]
+    awaitingWardTarget: null,
+    awaitingHexChoice: null,
+    awaitingEclipseChoice: null
   },
-  
-  // Combat system
-  combatLog: [],
-  
-  // Active effects
-  traps: [],                         // {cell: number, player: number}
-  pendingCurses: [],                // {targetCell: number, fromCell: number, player: number}
-  
-  phase: 'reroll',
-  gameOver: false,
-  firstTurnAutoReroll: true
+  phase: 'place', // Start in place phase for testing
+  traps: [],
+  gameOver: false
 };
 
-// Enhanced tile structure
-const createTile = (player, type, wheelIndex) => ({
-  player: player,
-  type: type,
-  originalType: type,                // For ECLIPSE tracking
-  wheelIndex: wheelIndex,
-  shields: 0,
-  cursed: false,
-  trapToken: null
-});
+// Limits & resolution memory
+gameState.lastFlips = [];           // [{idx, from, to, src:'RPS'|'TRAP'|'CURSE'}]
+gameState.omen = { 1: 0, 2: 1 };      // P2 gets 1 Omen per round
+gameState.rerollsLeft = { 1: 2, 2: 2 }; // 2 rerolls remaining (the initial roll in T1 does not count)
+gameState.rerollUsedThisTurn = false; // max 1 per turn (T2/T3)
 
-// ===== UTILITY FUNCTIONS =====
+// UI State
+let selectedCell = null;
+let messages = [];
 
-function areAdjacent(cellA, cellB) {
-  const rowA = Math.floor(cellA / 3);
-  const colA = cellA % 3;
-  const rowB = Math.floor(cellB / 3);
-  const colB = cellB % 3;
-  
-  return (Math.abs(rowA - rowB) === 1 && colA === colB) ||
-         (Math.abs(colA - colB) === 1 && rowA === rowB);
+// Initialize the UI
+function initializeUI() {
+  createBoard();
+  createWheels();
+  updateUI();
+  addMessage('Game initialized. Player 1 starts!', 'info');
+}
+
+function canUseOmenNow(){
+  const who = gameState.currentPlayer; // player who starts the turn
+  return gameState.omen[who] && gameState.lastFlips && gameState.lastFlips.length>0;
+}
+
+function applyOmenOn(idx){
+  const who = gameState.currentPlayer;
+  if (!canUseOmenNow()) return false;
+  const found = gameState.lastFlips.find(f => f.idx===idx);
+  if (!found) { addMessage('Omen: clicked cell is not from last flip', 'info'); return false; }
+  // restore owner
+  const T = gameState.board[idx];
+  T.player = found.from;
+  gameState.omen[who] = 0; // consumed
+  addMessage(`Omen: flip cancelled on ${idx}`, 'combat');
+  return true;
+}
+
+function createBoard() {
+  const board = document.getElementById('gameBoard');
+  board.innerHTML = '';
+
+  for (let i = 0; i < 9; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    cell.id = `cell-${i}`;
+    cell.onclick = () => cellClick(i);
+    board.appendChild(cell);
+  }
+}
+
+function createWheels() {
+  // Player 1 wheels
+  const p1Wheels = document.getElementById('player1Wheels');
+  p1Wheels.innerHTML = '';
+  for (let i = 0; i < 5; i++) {
+    const wheel = document.createElement('div');
+    wheel.className = 'wheel';
+    wheel.id = `p1-wheel-${i}`;
+    wheel.onclick = () => wheelClick(0, i);
+    p1Wheels.appendChild(wheel);
+  }
+
+  // Player 2 wheels (hidden for AI)
+  const p2Wheels = document.getElementById('player2Wheels');
+  p2Wheels.innerHTML = '';
+  for (let i = 0; i < 5; i++) {
+    const wheel = document.createElement('div');
+    wheel.className = 'wheel hidden';
+    wheel.id = `p2-wheel-${i}`;
+    wheel.textContent = '?';
+    p2Wheels.appendChild(wheel);
+  }
+}
+
+function updateUI() {
+  updateGameInfo();
+  updateBoard();
+  updateWheels();
+  updateControls();
+  updateSpecialEffects();
+}
+
+function updateGameInfo() {
+  document.getElementById('currentRound').textContent = gameState.currentRound;
+  document.getElementById('currentTurn').textContent = gameState.currentTurn;
+  document.getElementById('currentPlayer').textContent = gameState.currentPlayer;
+  document.getElementById('p1Score').textContent = gameState.scores[0];
+  document.getElementById('p2Score').textContent = gameState.scores[1];
+  document.getElementById('rerollsUsed').textContent = gameState.players[gameState.currentPlayer - 1].rerollsUsed;
+  document.getElementById('phaseInfo').textContent = `Phase: ${gameState.phase}`;
+}
+
+function updateBoard() {
+  for (let i = 0; i < 9; i++) {
+    const cellEl = document.getElementById(`cell-${i}`);
+    const tile = gameState.board[i];
+
+    cellEl.innerHTML = '';
+    cellEl.className = 'cell';
+
+    // Check if highlighted
+    if (gameState.placementState.adjacentHighlighted.includes(i)) {
+      cellEl.classList.add('highlighted');
+    }
+
+    // Check if pending
+    const pending = gameState.placementState.pendingPlacements.find(p => p.cellIndex === i);
+    if (pending) {
+      cellEl.classList.add('pending');
+    }
+
+    if (tile) {
+      const tileEl = document.createElement('div');
+      tileEl.className = `tile player${tile.player}`;
+      tileEl.textContent = TILE_ICONS[tile.type];
+      cellEl.appendChild(tileEl);
+
+      // Show shields
+      if (tile.shields > 0) {
+        const shieldEl = document.createElement('div');
+        shieldEl.className = 'shields';
+        shieldEl.textContent = tile.shields;
+        cellEl.appendChild(shieldEl);
+      }
+    }
+
+    // Show traps
+    const trap = gameState.traps.find(t => t.cell === i);
+    if (trap && !tile) {
+      const trapEl = document.createElement('div');
+      trapEl.className = 'trap';
+      trapEl.textContent = '⭕';
+      cellEl.appendChild(trapEl);
+    }
+  }
+}
+
+function updateWheels() {
+  // Player 1 wheels
+  for (let i = 0; i < 5; i++) {
+    const wheelEl = document.getElementById(`p1-wheel-${i}`);
+    const wheel = gameState.players[0].wheels[i];
+    const isUsed = gameState.players[0].usedWheels.includes(i);
+    const isSelected = gameState.placementState.selectedWheel === i;
+
+    wheelEl.textContent = TILE_ICONS[wheel] || '?';
+    wheelEl.className = 'wheel';
+
+    if (isUsed) {
+      wheelEl.classList.add('used');
+    } else if (isSelected) {
+      wheelEl.classList.add('selected');
+    }
+  }
+}
+
+function updateControls() {
+  const isHumanTurn = gameState.players[gameState.currentPlayer - 1].isHuman;
+  const me = gameState.currentPlayer;
+  const canReroll = (gameState.phase === 'reroll') &&
+                    (me === 1) &&
+                    (gameState.currentTurn >= 2) &&
+                    (!gameState.rerollUsedThisTurn) &&
+                    (gameState.rerollsLeft[me] > 0);
+
+  const canValidate = gameState.placementState.pendingPlacements.length > 0 &&
+    !gameState.placementState.awaitingWardTarget &&
+    !gameState.placementState.awaitingHexChoice &&
+    !gameState.placementState.awaitingEclipseChoice;
+
+  document.getElementById('rerollBtn').disabled = !isHumanTurn || !canReroll;
+  document.getElementById('skipRerollBtn').disabled = !isHumanTurn || gameState.phase !== 'reroll';
+  document.getElementById('validateBtn').disabled = !isHumanTurn || !canValidate;
+  document.getElementById('cancelBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
+  document.getElementById('resetBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
+}
+
+function updateSpecialEffects() {
+  const promptEl = document.getElementById('effectPrompt');
+  const effectsEl = document.getElementById('specialEffects');
+
+  // Clear previous content
+  effectsEl.innerHTML = '<div class="effect-prompt" id="effectPrompt"></div>';
+  const newPromptEl = document.getElementById('effectPrompt');
+
+  if (gameState.placementState.awaitingWardTarget) {
+    const wardState = gameState.placementState.awaitingWardTarget;
+    newPromptEl.textContent = `🛡️ WARD: Choose ally to shield`;
+
+    const optionsEl = document.createElement('div');
+    optionsEl.className = 'effect-options';
+
+    wardState.availableTargets.forEach(cellIndex => {
+      const btn = document.createElement('button');
+      btn.className = 'effect-btn';
+      btn.textContent = `Cell ${cellIndex}`;
+      btn.onclick = () => handleWardTarget(wardState.tileCell, cellIndex);
+      optionsEl.appendChild(btn);
+    });
+
+    effectsEl.appendChild(optionsEl);
+
+  } else if (gameState.placementState.awaitingHexChoice) {
+    const hexState = gameState.placementState.awaitingHexChoice;
+    newPromptEl.textContent = `🔮 HEX: Choose curse or trap`;
+
+    const optionsEl = document.createElement('div');
+    optionsEl.className = 'effect-options';
+
+    if (hexState.curseTargets.length > 0) {
+      hexState.curseTargets.forEach(cellIndex => {
+        const btn = document.createElement('button');
+        btn.className = 'effect-btn';
+        btn.textContent = `Curse ${cellIndex}`;
+        btn.onclick = () => handleHexChoice(hexState.tileCell, cellIndex, 'curse');
+        optionsEl.appendChild(btn);
+      });
+    }
+
+    if (hexState.trapTargets.length > 0) {
+      hexState.trapTargets.forEach(cellIndex => {
+        const btn = document.createElement('button');
+        btn.className = 'effect-btn';
+        btn.textContent = `Trap ${cellIndex}`;
+        btn.onclick = () => handleHexChoice(hexState.tileCell, cellIndex, 'trap');
+        optionsEl.appendChild(btn);
+      });
+    }
+
+    effectsEl.appendChild(optionsEl);
+
+  } else if (gameState.placementState.awaitingEclipseChoice) {
+    const eclipseState = gameState.placementState.awaitingEclipseChoice;
+    newPromptEl.textContent = `🌙 ECLIPSE: Choose affinity`;
+
+    const optionsEl = document.createElement('div');
+    optionsEl.className = 'effect-options';
+
+    ['ATK', 'HEX', 'WARD'].forEach(type => {
+      const btn = document.createElement('button');
+      btn.className = 'effect-btn';
+      btn.textContent = `${TILE_ICONS[type]} ${type}`;
+      btn.onclick = () => handleEclipseChoice(eclipseState.tileCell, type);
+      optionsEl.appendChild(btn);
+    });
+
+    effectsEl.appendChild(optionsEl);
+
+  } else {
+    newPromptEl.textContent = gameState.phase === 'reroll' ?
+      'Reroll or skip to placement phase' :
+      'Select wheel, then select cell to place tile';
+  }
+}
+
+// Event handlers
+function wheelClick(player, wheelIndex) {
+  if (player !== 0 || gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
+
+  const isUsed = gameState.players[0].usedWheels.includes(wheelIndex);
+  if (isUsed) return;
+
+  gameState.placementState.selectedWheel = wheelIndex;
+  addMessage(`Selected wheel ${wheelIndex} (${gameState.players[0].wheels[wheelIndex]})`, 'info');
+  updateUI();
+}
+
+function cellClick(cellIndex) {
+  if (gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
+
+  if (gameState.placementState.selectedWheel === null) {
+    addMessage('Select a wheel first!', 'info');
+    return;
+  }
+
+  if (!isCellEmpty(cellIndex)) {
+    addMessage('Cell is not empty!', 'info');
+    return;
+  }
+
+  // Check adjacency for second tile
+  if (gameState.placementState.pendingPlacements.length === 1) {
+    if (!gameState.placementState.adjacentHighlighted.includes(cellIndex)) {
+      addMessage('Second tile must be adjacent to first!', 'info');
+      return;
+    }
+  }
+
+  // placement cap: 2 in T1–T2, 1 in T3
+  const maxTiles = (gameState.currentTurn === 3) ? 1 : 2;
+  if (gameState.placementState.pendingPlacements.length >= maxTiles) {
+    addMessage(`Cap reached: ${maxTiles} tile(s) this turn`, 'info');
+    return;
+  }
+  placeTile(cellIndex);
+}
+
+function placeTile(cellIndex) {
+  const wheelIndex = gameState.placementState.selectedWheel;
+  const tileType = gameState.players[0].wheels[wheelIndex];
+
+  // Create tile
+  const tile = {
+    player: 1,
+    type: tileType,
+    originalType: tileType,
+    wheelIndex: wheelIndex,
+    shields: 0,
+    cursed: false,
+    trapToken: null
+  };
+
+  // Add to pending placements
+  gameState.placementState.pendingPlacements.push({
+    wheelIndex: wheelIndex,
+    cellIndex: cellIndex,
+    tileType: tileType
+  });
+
+  // Place on board (preview)
+  gameState.board[cellIndex] = tile;
+  gameState.placementState.selectedWheel = null;
+
+  const trappedByOpp = gameState.traps.some(t => t.cell === cellIndex && t.player !== tile.player);
+
+  // Memorize info about this placement
+  gameState.placementState.pendingPlacements[gameState.placementState.pendingPlacements.length-1].trapped = trappedByOpp;
+
+  // If trapped: the placement effect is CANCELLED → do not trigger prompts here
+  if (!trappedByOpp) {
+    if (tileType === 'WARD')      startWardEffect(cellIndex);
+    else if (tileType === 'HEX')  startHexEffect(cellIndex);
+    else if (tileType === 'ECLIPSE') startEclipseEffect(cellIndex);
+  } else {
+    addMessage('Trap: placement effect cancelled (flip attempted on validation)', 'effect');
+  }
+
+  // Handle special effects
+  if (tileType === 'WARD') {
+    startWardEffect(cellIndex);
+  } else if (tileType === 'HEX') {
+    startHexEffect(cellIndex);
+  } else if (tileType === 'ECLIPSE') {
+    startEclipseEffect(cellIndex);
+  }
+
+  updateAdjacentHighlights();
+  addMessage(`Placed ${tileType} on cell ${cellIndex}`, 'effect');
+  updateUI();
+}
+
+function startWardEffect(cellIndex) {
+  const adjacentAllies = [];
+  const adjacentCells = getAdjacentCells(cellIndex);
+
+  adjacentCells.forEach(adjCell => {
+    const tile = gameState.board[adjCell];
+    if (tile && tile.player === 1) {
+      adjacentAllies.push(adjCell);
+    }
+  });
+
+  if (adjacentAllies.length === 0) {
+    // No allies, just shield self
+    gameState.board[cellIndex].shields = 1;
+    addMessage('WARD: Self-shield applied', 'effect');
+  } else {
+    // Multiple targets, need choice
+    gameState.placementState.awaitingWardTarget = {
+      tileCell: cellIndex,
+      availableTargets: adjacentAllies
+    };
+  }
+}
+
+function startHexEffect(cellIndex) {
+  const curseTargets = [];
+  const trapTargets = [];
+  const adjacentCells = getAdjacentCells(cellIndex);
+
+  adjacentCells.forEach(adjCell => {
+    const tile = gameState.board[adjCell];
+    if (tile && tile.player !== 1) {
+      curseTargets.push(adjCell);
+    } else if (!tile) {
+      trapTargets.push(adjCell);
+    }
+  });
+
+  if (curseTargets.length === 0 && trapTargets.length === 0) {
+    addMessage('HEX: No valid targets', 'effect');
+    return;
+  }
+
+  gameState.placementState.awaitingHexChoice = {
+    tileCell: cellIndex,
+    curseTargets: curseTargets,
+    trapTargets: trapTargets
+  };
+}
+
+function startEclipseEffect(cellIndex) {
+  gameState.placementState.awaitingEclipseChoice = {
+    tileCell: cellIndex,
+    wheelIndex: gameState.placementState.pendingPlacements[gameState.placementState.pendingPlacements.length - 1].wheelIndex
+  };
+}
+
+function handleWardTarget(wardCell, targetCell) {
+  gameState.board[wardCell].shields = 1;
+  gameState.board[targetCell].shields = 1;
+  gameState.placementState.awaitingWardTarget = null;
+
+  addMessage(`WARD: Shields applied to ward and ally at ${targetCell}`, 'effect');
+  updateUI();
+}
+
+function handleHexChoice(hexCell, targetCell, mode) {
+  if (mode === 'curse') {
+    const target = gameState.board[targetCell];
+    if (target) {
+      target.cursed = 1; // mark
+      addMessage(`HEX: curse placed on ${targetCell}`, 'effect');
+    }
+  } else if (mode === 'trap') {
+    // Remove old traps for this player
+    gameState.traps = gameState.traps.filter(t => t.player !== 1);
+    gameState.traps.push({ cell: targetCell, player: 1 });
+    addMessage(`HEX: Trap placed on cell ${targetCell}`, 'effect');
+  }
+
+  gameState.placementState.awaitingHexChoice = null;
+  updateUI();
+}
+
+function handleEclipseChoice(eclipseCell, chosenType) {
+  gameState.board[eclipseCell].type = chosenType;
+  gameState.placementState.awaitingEclipseChoice = null;
+
+  addMessage(`ECLIPSE: Chose ${chosenType} affinity`, 'effect');
+
+  // Trigger cascading effects
+  if (chosenType === 'WARD') {
+    startWardEffect(eclipseCell);
+  } else if (chosenType === 'HEX') {
+    startHexEffect(eclipseCell);
+  }
+
+  updateUI();
+}
+
+// Action handlers
+function rollFaces(playerIndex, onlyUnused = true) {
+  const P = gameState.players[playerIndex];
+  // ensures at most 1 ECLIPSE per player for the round
+  const allowEclipse = !P.eclipseUsed;
+  let eclipseRolled = false;
+  for (let i = 0; i < 5; i++) {
+    if (onlyUnused && P.usedWheels.includes(i)) continue;
+    const pool = ['ATK', 'HEX', 'WARD'];
+    if (allowEclipse && !eclipseRolled) pool.push('ECLIPSE');
+    const face = pool[Math.floor(Math.random() * pool.length)];
+    P.wheels[i] = (face === 'ECLIPSE' ? (eclipseRolled ? 'ATK' : (eclipseRolled = true, 'ECLIPSE')) : face);
+  }
+}
+
+function rerollAction() {
+  const me = gameState.currentPlayer;
+  if (gameState.phase !== 'reroll' || me !== 1) return;
+  if (gameState.currentTurn === 1) { addMessage('T1 = initial roll already done', 'info'); return; }
+  if (gameState.rerollUsedThisTurn) { addMessage('Already 1 reroll this turn', 'info'); return; }
+  if (gameState.rerollsLeft[me] <= 0) { addMessage('No rerolls left', 'info'); return; }
+
+  rollFaces(0, true); // reroll unused wheels for the human player
+  gameState.rerollsLeft[me]--;
+  gameState.rerollUsedThisTurn = true;
+  gameState.phase = 'place';
+  addMessage(`Reroll done. Remaining: ${gameState.rerollsLeft[me]}`, 'info');
+  updateUI();
+}
+
+function skipRerollAction() {
+  if (gameState.phase !== 'reroll' || gameState.currentPlayer !== 1) return;
+  gameState.phase = 'place';
+  addMessage('Reroll phase skipped', 'info');
+  updateUI();
+}
+
+function validateAction() {
+  if (gameState.placementState.pendingPlacements.length === 0) return;
+
+  // No unresolved special effects
+  if (gameState.placementState.awaitingWardTarget || 
+      gameState.placementState.awaitingHexChoice || 
+      gameState.placementState.awaitingEclipseChoice) {
+    addMessage('Resolve special effects first!', 'info');
+    return;
+  }
+
+  const me = 1, opp = 2; // human vs AI (for now)
+  const placements = gameState.placementState.pendingPlacements.slice();
+
+  // 1) mark used wheels (and ECLIPSE used)
+  placements.forEach(p => {
+    if (!gameState.players[0].usedWheels.includes(p.wheelIndex)){
+      gameState.players[0].usedWheels.push(p.wheelIndex);
+    }
+    if (gameState.players[0].wheels[p.wheelIndex] === 'ECLIPSE') {
+      gameState.players[0].eclipseUsed = true;
+    }
+  });
+
+  // 2) TAG TRAP & cancel effect on placement if trapped
+  // (already skipped prompts if trapped at placeTile)
+
+  // 3) TRAP TRIGGER (immediate flip attempted on tiles placed on trapped cell)
+  const flips = [];
+  for (const p of placements) {
+    if (p.trapped) {
+      // consume opponent trap and attempt flip
+      const trapIdx = gameState.traps.findIndex(t => t.cell===p.cellIndex && t.player===opp);
+      if (trapIdx>=0) {
+        const T = gameState.board[p.cellIndex];
+        if (T.shields>0) { T.shields=0; addMessage(`Trap blocked by shield on ${p.cellIndex}`, 'combat'); }
+        else { flips.push({idx:p.cellIndex, from:T.player, to:opp, src:'TRAP'}); T.player = opp; }
+        gameState.traps.splice(trapIdx,1); // trap consumed
+      }
+    }
+  }
+
+  // 4) SIMULTANEOUS RPS
+  flips.push(...resolveCombatSimultaneous(me));
+
+  // TODO: 5) DELAYED EFFECTS (curses) — to implement for a "cursedBy" marker
+  cursedByTurn = gameState.currentTurn
+
+  // 6) Store for defender's Omen
+  gameState.lastFlips = flips.slice();
+
+  // 7) Reset placement state
+  gameState.placementState.pendingPlacements = [];
+  gameState.placementState.adjacentHighlighted = [];
+  gameState.rerollUsedThisTurn = false; // new turn, reroll possible (if T2/T3)
+
+  addMessage('Turn validated. Resolution done.', 'combat');
+
+  // 8) Switch to AI turn (defender's turn start = Omen possible)
+  gameState.currentPlayer = 2;
+
+  // AI Omen (optional). For now, not used automatically.
+  // TODO: Choose the most "central" flip to cancel here.
+
+  addMessage('AI turn...', 'info');
+  updateUI();
+
+  setTimeout(simulateAITurn, 800);
+}
+
+function cancelAction() {
+  if (gameState.placementState.pendingPlacements.length === 0) return;
+
+  const lastPlacement = gameState.placementState.pendingPlacements.pop();
+  gameState.board[lastPlacement.cellIndex] = null;
+
+  // Reset special effects
+  gameState.placementState.awaitingWardTarget = null;
+  gameState.placementState.awaitingHexChoice = null;
+  gameState.placementState.awaitingEclipseChoice = null;
+
+  updateAdjacentHighlights();
+  addMessage(`Cancelled placement from cell ${lastPlacement.cellIndex}`, 'info');
+  updateUI();
+}
+
+function resetAction() {
+  gameState.placementState.pendingPlacements.forEach(placement => {
+    gameState.board[placement.cellIndex] = null;
+  });
+
+  gameState.placementState.pendingPlacements = [];
+  gameState.placementState.selectedWheel = null;
+  gameState.placementState.adjacentHighlighted = [];
+  gameState.placementState.awaitingWardTarget = null;
+  gameState.placementState.awaitingHexChoice = null;
+  gameState.placementState.awaitingEclipseChoice = null;
+
+  addMessage('All placements reset', 'info');
+  updateUI();
+}
+
+// Utility functions
+function isCellEmpty(cellIndex) {
+  if (gameState.board[cellIndex] !== null) return false;
+  return !gameState.placementState.pendingPlacements.some(p => p.cellIndex === cellIndex);
 }
 
 function getAdjacentCells(cellIndex) {
   const row = Math.floor(cellIndex / 3);
   const col = cellIndex % 3;
   const adjacent = [];
-  
+
   const directions = [[-1, 0], [0, 1], [1, 0], [0, -1]];
-  
+
   directions.forEach(([deltaRow, deltaCol]) => {
     const newRow = row + deltaRow;
     const newCol = col + deltaCol;
-    
+
     if (newRow >= 0 && newRow < 3 && newCol >= 0 && newCol < 3) {
       adjacent.push(newRow * 3 + newCol);
     }
   });
-  
+
   return adjacent;
 }
 
-function isCellEmpty(cellIndex) {
-  if (gameState.board[cellIndex] !== null) return false;
-  
-  return !gameState.placementState.pendingPlacements.some(
-    placement => placement.cellIndex === cellIndex
-  );
+function areAdjacent(cellA, cellB) {
+  const rowA = Math.floor(cellA / 3);
+  const colA = cellA % 3;
+  const rowB = Math.floor(cellB / 3);
+  const colB = cellB % 3;
+
+  return (Math.abs(rowA - rowB) === 1 && colA === colB) ||
+    (Math.abs(colA - colB) === 1 && rowA === rowB);
 }
 
-function getAllyAdjacentCells(cellIndex, player) {
-  return getAdjacentCells(cellIndex).filter(adjCell => {
-    const tile = gameState.board[adjCell];
-    return tile && tile.player === player;
-  });
-}
+function updateAdjacentHighlights() {
+  gameState.placementState.adjacentHighlighted = [];
 
-function getEnemyAdjacentCells(cellIndex, player) {
-  return getAdjacentCells(cellIndex).filter(adjCell => {
-    const tile = gameState.board[adjCell];
-    return tile && tile.player !== player;
-  });
+  if (gameState.placementState.pendingPlacements.length === 1) {
+    const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+    if (maxTiles === 2) {
+      const firstPlacement = gameState.placementState.pendingPlacements[0];
+      const adjacentCells = getAdjacentCells(firstPlacement.cellIndex);
+      gameState.placementState.adjacentHighlighted = adjacentCells.filter(cell => isCellEmpty(cell));
+    }
+  }
 }
-
-function getEmptyAdjacentCells(cellIndex) {
-  return getAdjacentCells(cellIndex).filter(adjCell => isCellEmpty(adjCell));
-}
-
-// ===== COMBAT SYSTEM =====
 
 function doesTileBeat(typeA, typeB) {
-  if (!COMBAT_RULES[typeA] || !COMBAT_RULES[typeB]) {
-    return false;
-  }
-  
-  return COMBAT_RULES[typeA].beats === typeB;
+  const rules = {
+    ATK: 'HEX',
+    HEX: 'WARD',
+    WARD: 'ATK'
+  };
+  return rules[typeA] === typeB;
 }
 
-function attemptFlip(attackerCell, defenderCell, reason = 'combat') {
-  const attacker = gameState.board[attackerCell];
-  const defender = gameState.board[defenderCell];
-  
-  if (!attacker || !defender) {
-    console.log(`Flip failed: Invalid tiles (${attackerCell} → ${defenderCell})`);
-    return false;
-  }
-  
-  if (attacker.player === defender.player) {
-    console.log(`Flip failed: Same player (${attackerCell} → ${defenderCell})`);
-    return false;
-  }
-  
-  const canFlip = doesTileBeat(attacker.type, defender.type);
-  
-  if (!canFlip) {
-    gameState.combatLog.push({
-      type: 'flip_failed',
-      reason: reason,
-      attacker: attackerCell,
-      defender: defenderCell,
-      attackerType: attacker.type,
-      defenderType: defender.type,
-      message: `${attacker.type} cannot beat ${defender.type}`
-    });
-    console.log(`❌ Flip failed: ${attacker.type} cannot beat ${defender.type}`);
-    return false;
-  }
-  
-  // Check shields
-  if (defender.shields > 0) {
-    defender.shields--;
-    gameState.combatLog.push({
-      type: 'shield_block',
-      reason: reason,
-      attacker: attackerCell,
-      defender: defenderCell,
-      attackerType: attacker.type,
-      defenderType: defender.type,
-      shieldsLeft: defender.shields,
-      message: `${defender.type} blocked with shield (${defender.shields} left)`
-    });
-    console.log(`🛡️ Shield block: ${defender.type} blocked, ${defender.shields} shields left`);
-    return false;
-  }
-  
-  // Successful flip
-  const oldPlayer = defender.player;
-  const oldType = defender.type;
-  
-  defender.player = attacker.player;
-  
-  gameState.combatLog.push({
-    type: 'flip_success',
-    reason: reason,
-    attacker: attackerCell,
-    defender: defenderCell,
-    attackerType: attacker.type,
-    defenderType: oldType,
-    oldPlayer: oldPlayer,
-    newPlayer: defender.player,
-    message: `${attacker.type} flipped ${oldType} (P${oldPlayer} → P${defender.player})`
-  });
-  
-  console.log(`⚔️ Flip success: ${attacker.type} flipped ${oldType} (P${oldPlayer} → P${defender.player})`);
-  return true;
-}
+function resolveCombatSimultaneous(activePlayer){
+  const atk = Array.from({length:9},()=>({p1:0,p2:0}));
 
-function resolveCombat() {
-  console.log('\n=== COMBAT RESOLUTION ===');
-  gameState.combatLog = [];
-  
-  let flipsOccurred = false;
-  
-  for (let cellIndex = 0; cellIndex < 9; cellIndex++) {
-    const tile = gameState.board[cellIndex];
-    if (!tile) continue;
-    
-    const adjacentCells = getAdjacentCells(cellIndex);
-    
-    adjacentCells.forEach(adjCell => {
-      const adjTile = gameState.board[adjCell];
-      if (!adjTile) return;
-      
-      if (tile.player !== adjTile.player) {
-        const flipSuccessful = attemptFlip(cellIndex, adjCell, 'combat');
-        if (flipSuccessful) {
-          flipsOccurred = true;
-        }
+  // 1) collect all attempts (simultaneous)
+  for (let i=0;i<9;i++){
+    const A = gameState.board[i]; if (!A) continue;
+    const neigh = getAdjacentCells(i);
+    for (const j of neigh){
+      const T = gameState.board[j]; if (!T || T.player===A.player) continue;
+      if (doesTileBeat(A.type, T.type)){ // A.aff beats T.aff (here aff=type)
+        (A.player===1?atk[j].p1++:atk[j].p2++);
       }
-    });
-  }
-  
-  if (!flipsOccurred) {
-    console.log('No combat occurred this turn');
-  }
-  
-  return flipsOccurred;
-}
-
-function getCombatPreview(cellIndex, tileType, player) {
-  const preview = [];
-  const adjacentCells = getAdjacentCells(cellIndex);
-  
-  adjacentCells.forEach(adjCell => {
-    const adjTile = gameState.board[adjCell];
-    if (!adjTile || adjTile.player === player) return;
-    
-    const wouldFlip = doesTileBeat(tileType, adjTile.type) && adjTile.shields === 0;
-    const wouldBeFlipped = doesTileBeat(adjTile.type, tileType);
-    
-    if (wouldFlip || wouldBeFlipped) {
-      preview.push({
-        adjCell: adjCell,
-        adjType: adjTile.type,
-        adjShields: adjTile.shields,
-        wouldFlip: wouldFlip,
-        wouldBeFlipped: wouldBeFlipped
-      });
-    }
-  });
-  
-  return preview;
-}
-
-// ===== SPECIAL EFFECTS SYSTEM =====
-
-/**
- * WARD SYSTEM: Shield placement
- */
-function startWardTargeting(cellIndex) {
-  const tile = gameState.board[cellIndex];
-  if (!tile || tile.type !== 'WARD') return false;
-  
-  const availableTargets = getAllyAdjacentCells(cellIndex, tile.player);
-  
-  if (availableTargets.length === 0) {
-    // No allies to target, just add shield to self
-    tile.shields++;
-    console.log(`🛡️ WARD self-shield: +1 shield on cell ${cellIndex}`);
-    return true;
-  }
-  
-  // Multiple targets available, require choice
-  gameState.placementState.awaitingWardTarget = {
-    tileCell: cellIndex,
-    availableTargets: availableTargets
-  };
-  
-  console.log(`🛡️ WARD targeting: Choose ally from cells [${availableTargets.join(', ')}]`);
-  return true;
-}
-
-function selectWardTarget(wardCell, targetCell) {
-  const wardState = gameState.placementState.awaitingWardTarget;
-  
-  if (!wardState || wardState.tileCell !== wardCell) {
-    console.log('No ward targeting in progress');
-    return false;
-  }
-  
-  if (!wardState.availableTargets.includes(targetCell)) {
-    console.log('Invalid ward target');
-    return false;
-  }
-  
-  // Add shields
-  const wardTile = gameState.board[wardCell];
-  const targetTile = gameState.board[targetCell];
-  
-  wardTile.shields++;
-  targetTile.shields++;
-  
-  // Record the choice
-  gameState.placementState.wardTargets.push({
-    wardCell: wardCell,
-    targetCell: targetCell
-  });
-  
-  gameState.placementState.awaitingWardTarget = null;
-  
-  console.log(`🛡️ WARD effect: +1 shield on ward (${wardCell}) and ally (${targetCell})`);
-  return true;
-}
-
-/**
- * HEX SYSTEM: Curse or Trap choice
- */
-function startHexChoice(cellIndex) {
-  const tile = gameState.board[cellIndex];
-  if (!tile || tile.type !== 'HEX') return false;
-  
-  const curseTargets = getEnemyAdjacentCells(cellIndex, tile.player);
-  const trapTargets = getEmptyAdjacentCells(cellIndex);
-  
-  if (curseTargets.length === 0 && trapTargets.length === 0) {
-    console.log('🔮 HEX: No valid targets for curse or trap');
-    return true; // HEX placed but no effect
-  }
-  
-  gameState.placementState.awaitingHexChoice = {
-    tileCell: cellIndex,
-    curseTargets: curseTargets,
-    trapTargets: trapTargets
-  };
-  
-  console.log(`🔮 HEX choice: Curse enemies [${curseTargets.join(', ')}] OR trap empties [${trapTargets.join(', ')}]`);
-  return true;
-}
-
-function selectHexTarget(hexCell, targetCell, mode) {
-  const hexState = gameState.placementState.awaitingHexChoice;
-  
-  if (!hexState || hexState.tileCell !== hexCell) {
-    console.log('No hex choice in progress');
-    return false;
-  }
-  
-  let validTarget = false;
-  
-  if (mode === HEX_MODES.CURSE && hexState.curseTargets.includes(targetCell)) {
-    validTarget = true;
-    console.log(`🔮 HEX curse: Target cell ${targetCell} will be cursed`);
-    
-    // Add to pending curses (resolved at end of opponent's turn)
-    gameState.pendingCurses.push({
-      targetCell: targetCell,
-      fromCell: hexCell,
-      player: gameState.board[hexCell].player
-    });
-    
-  } else if (mode === HEX_MODES.TRAP && hexState.trapTargets.includes(targetCell)) {
-    validTarget = true;
-    console.log(`🔮 HEX trap: Trap token placed on cell ${targetCell}`);
-    
-    // Remove old trap for this player
-    gameState.traps = gameState.traps.filter(trap => trap.player !== gameState.board[hexCell].player);
-    
-    // Add new trap
-    gameState.traps.push({
-      cell: targetCell,
-      player: gameState.board[hexCell].player
-    });
-  }
-  
-  if (!validTarget) {
-    console.log('Invalid hex target or mode');
-    return false;
-  }
-  
-  // Record the choice
-  gameState.placementState.hexChoices.push({
-    hexCell: hexCell,
-    mode: mode,
-    targetCell: targetCell
-  });
-  
-  gameState.placementState.awaitingHexChoice = null;
-  return true;
-}
-
-/**
- * ECLIPSE SYSTEM: Affinity choice
- */
-function startEclipseChoice(cellIndex, wheelIndex) {
-  const tile = gameState.board[cellIndex];
-  if (!tile || tile.originalType !== 'ECLIPSE') return false;
-  
-  gameState.placementState.awaitingEclipseChoice = {
-    tileCell: cellIndex,
-    wheelIndex: wheelIndex
-  };
-  
-  console.log(`🌙 ECLIPSE choice: Select affinity (ATK/HEX/WARD) for cell ${cellIndex}`);
-  return true;
-}
-
-function selectEclipseAffinity(eclipseCell, chosenType) {
-  const eclipseState = gameState.placementState.awaitingEclipseChoice;
-  
-  if (!eclipseState || eclipseState.tileCell !== eclipseCell) {
-    console.log('No eclipse choice in progress');
-    return false;
-  }
-  
-  if (!['ATK', 'HEX', 'WARD'].includes(chosenType)) {
-    console.log('Invalid eclipse affinity');
-    return false;
-  }
-  
-  // Change tile type
-  const tile = gameState.board[eclipseCell];
-  tile.type = chosenType;
-  
-  // Record the choice
-  gameState.placementState.eclipseChoices.push({
-    eclipseCell: eclipseCell,
-    wheelIndex: eclipseState.wheelIndex,
-    chosenType: chosenType
-  });
-  
-  gameState.placementState.awaitingEclipseChoice = null;
-  
-  console.log(`🌙 ECLIPSE affinity: Cell ${eclipseCell} is now ${chosenType}`);
-  
-  // Trigger special effects for chosen type
-  if (chosenType === 'WARD') {
-    startWardTargeting(eclipseCell);
-  } else if (chosenType === 'HEX') {
-    startHexChoice(eclipseCell);
-  }
-  
-  return true;
-}
-
-/**
- * Reset all special effect choices for a tile
- */
-function resetSpecialEffects(cellIndex) {
-  // Remove ward targets
-  gameState.placementState.wardTargets = gameState.placementState.wardTargets.filter(
-    ward => ward.wardCell !== cellIndex
-  );
-  
-  // Remove hex choices
-  gameState.placementState.hexChoices = gameState.placementState.hexChoices.filter(
-    hex => hex.hexCell !== cellIndex
-  );
-  
-  // Remove eclipse choices
-  gameState.placementState.eclipseChoices = gameState.placementState.eclipseChoices.filter(
-    eclipse => eclipse.eclipseCell !== cellIndex
-  );
-  
-  // Remove pending effects
-  gameState.pendingCurses = gameState.pendingCurses.filter(
-    curse => curse.fromCell !== cellIndex
-  );
-  
-  gameState.traps = gameState.traps.filter(trap => {
-    // More complex logic might be needed here
-    return true; // For now, keep traps
-  });
-  
-  // Reset awaiting states if they match
-  if (gameState.placementState.awaitingWardTarget?.tileCell === cellIndex) {
-    gameState.placementState.awaitingWardTarget = null;
-  }
-  if (gameState.placementState.awaitingHexChoice?.tileCell === cellIndex) {
-    gameState.placementState.awaitingHexChoice = null;
-  }
-  if (gameState.placementState.awaitingEclipseChoice?.tileCell === cellIndex) {
-    gameState.placementState.awaitingEclipseChoice = null;
-  }
-  
-  // Reset tile shields and type if needed
-  const tile = gameState.board[cellIndex];
-  if (tile) {
-    tile.shields = 0;
-    if (tile.originalType === 'ECLIPSE') {
-      tile.type = 'ECLIPSE'; // Reset to original
     }
   }
-}
 
-/**
- * Check if all special effects are resolved
- */
-function areSpecialEffectsResolved() {
-  return !gameState.placementState.awaitingWardTarget &&
-         !gameState.placementState.awaitingHexChoice &&
-         !gameState.placementState.awaitingEclipseChoice;
-}
+  // 2) apply simultaneously (shield -> arbitration -> flip)
+  const flips = [];
+  for (let j=0;j<9;j++){
+    const T = gameState.board[j]; if (!T) continue;
+    let {p1,p2} = atk[j];
+    if (!p1 && !p2) continue;
 
-// ===== PLACEMENT WORKFLOW (Enhanced) =====
-
-function selectWheel(wheelIndex) {
-  if (gameState.phase !== 'place') {
-    console.log('Not in placement phase');
-    return false;
-  }
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  if (!currentPlayer.isHuman) {
-    console.log('It is not the human player\'s turn');
-    return false;
-  }
-  
-  if (currentPlayer.usedWheels.includes(wheelIndex)) {
-    console.log('This wheel is already used');
-    return false;
-  }
-  
-  if (gameState.placementState.pendingPlacements.some(p => p.wheelIndex === wheelIndex)) {
-    console.log('This wheel is already selected for placement');
-    return false;
-  }
-  
-  gameState.placementState.selectedWheel = wheelIndex;
-  console.log(`Wheel ${wheelIndex} selected (${currentPlayer.wheels[wheelIndex]})`);
-  
-  return true;
-}
-
-function placeSelectedWheel(cellIndex) {
-  if (gameState.phase !== 'place') {
-    console.log('Not in placement phase');
-    return false;
-  }
-  
-  if (gameState.placementState.selectedWheel === null) {
-    console.log('No wheel selected');
-    return false;
-  }
-  
-  if (!isCellEmpty(cellIndex)) {
-    console.log('Cell not available');
-    return false;
-  }
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  const wheelIndex = gameState.placementState.selectedWheel;
-  let tileType = currentPlayer.wheels[wheelIndex];
-  
-  // Check adjacency if it's the 2nd tile
-  if (gameState.placementState.pendingPlacements.length === 1) {
-    const firstPlacement = gameState.placementState.pendingPlacements[0];
-    if (!areAdjacent(firstPlacement.cellIndex, cellIndex)) {
-      console.log('The 2nd tile must be adjacent to the first');
-      return false;
+    // shield: blocks 1 attempt (regardless of side)
+    if (T.shields>0){
+      if      (p1>p2) p1--;
+      else if (p2>p1) p2--;
+      else if (activePlayer===1 && p2>0) p2--;
+      else if (activePlayer===2 && p1>0) p1--;
+      T.shields = 0;
     }
+
+    if (p1>p2 && T.player!==1){ flips.push({idx:j,from:T.player,to:1,src:'RPS'}); T.player=1; }
+    else if (p2>p1 && T.player!==2){ flips.push({idx:j,from:T.player,to:2,src:'RPS'}); T.player=2; }
   }
-  
-  // Create tile
-  let tile;
-  if (tileType === 'ECLIPSE') {
-    // ECLIPSE keeps original type for tracking
-    tile = createTile(gameState.currentPlayer, 'ECLIPSE', wheelIndex);
-    tile.originalType = 'ECLIPSE';
-  } else {
-    tile = createTile(gameState.currentPlayer, tileType, wheelIndex);
-  }
-  
-  // Show combat preview for non-ECLIPSE tiles
-  if (tileType !== 'ECLIPSE') {
-    const combatPreview = getCombatPreview(cellIndex, tileType, gameState.currentPlayer);
-    if (combatPreview.length > 0) {
-      console.log(`⚔️ Combat preview for ${tileType} on cell ${cellIndex}:`);
-      combatPreview.forEach(p => {
-        if (p.wouldFlip) {
-          console.log(`  → Would flip ${p.adjType} on cell ${p.adjCell}`);
-        }
-        if (p.wouldBeFlipped) {
-          console.log(`  ← Would be flipped by ${p.adjType} on cell ${p.adjCell}`);
-        }
-      });
-    }
-  }
-  
-  const placement = {
-    wheelIndex: wheelIndex,
-    cellIndex: cellIndex,
-    tileType: tileType
-  };
-  
-  gameState.placementState.pendingPlacements.push(placement);
-  gameState.placementState.selectedWheel = null;
-  
-  console.log(`Pending placement: ${tileType} on cell ${cellIndex}`);
-  
-  // Place tile on board for preview
-  gameState.board[cellIndex] = tile;
-  
-  // Handle special effects
-  if (tileType === 'ECLIPSE') {
-    startEclipseChoice(cellIndex, wheelIndex);
-  } else if (tileType === 'WARD') {
-    startWardTargeting(cellIndex);
-  } else if (tileType === 'HEX') {
-    startHexChoice(cellIndex);
-  }
-  
-  updateSecondTilePlacement();
-  
-  return true;
+  return flips;
 }
 
-function updateSecondTilePlacement() {
-  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
-  const currentPlacements = gameState.placementState.pendingPlacements.length;
-  
-  if (currentPlacements === 1 && maxTiles === 2) {
-    const firstPlacement = gameState.placementState.pendingPlacements[0];
-    const adjacentCells = getAdjacentCells(firstPlacement.cellIndex);
-    
-    gameState.placementState.adjacentHighlighted = adjacentCells.filter(cell => isCellEmpty(cell));
-    gameState.placementState.canPlaceSecond = true;
-    
-    console.log(`Available adjacent cells: [${gameState.placementState.adjacentHighlighted.join(', ')}]`);
-  } else {
-    gameState.placementState.adjacentHighlighted = [];
-    gameState.placementState.canPlaceSecond = false;
-  }
-}
+function simulateAITurn() {
 
-function cancelLastPlacement() {
-  if (gameState.placementState.pendingPlacements.length === 0) {
-    console.log('No placement to cancel');
-    return false;
-  }
-  
-  const lastPlacement = gameState.placementState.pendingPlacements.pop();
-  
-  // Reset special effects for this tile
-  resetSpecialEffects(lastPlacement.cellIndex);
-  
-  // Remove tile from board
-  gameState.board[lastPlacement.cellIndex] = null;
-  
-  console.log(`Placement cancelled: ${lastPlacement.tileType} from cell ${lastPlacement.cellIndex}`);
-  
-  updateSecondTilePlacement();
-  return true;
-}
+  // (optional) AI uses Omen if a flip took the center
+  // if (canUseOmenNow()) { const center=4; if (gameState.lastFlips.some(f=>f.idx===center)) { applyOmenOn(center); } }
 
-function cancelAllPlacements() {
-  console.log('Cancelling all placements');
-  
-  gameState.placementState.pendingPlacements.forEach(placement => {
-    resetSpecialEffects(placement.cellIndex);
-    gameState.board[placement.cellIndex] = null;
-  });
-  
-  // Reset all placement state
-  gameState.placementState.pendingPlacements = [];
-  gameState.placementState.selectedWheel = null;
-  gameState.placementState.adjacentHighlighted = [];
-  gameState.placementState.canPlaceSecond = false;
-  
-  // Reset special effects state
-  gameState.placementState.awaitingWardTarget = null;
-  gameState.placementState.awaitingHexChoice = null;
-  gameState.placementState.awaitingEclipseChoice = null;
-  gameState.placementState.wardTargets = [];
-  gameState.placementState.hexChoices = [];
-  gameState.placementState.eclipseChoices = [];
-}
+  addMessage('AI is thinking...', 'info');
 
-function validatePlacements() {
-  if (gameState.placementState.pendingPlacements.length === 0) {
-    console.log('No placement to validate');
-    return false;
-  }
-  
-  if (!areSpecialEffectsResolved()) {
-    console.log('Cannot validate: Special effects still pending');
-    return false;
-  }
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  console.log(`\n=== VALIDATING ${gameState.placementState.pendingPlacements.length} PLACEMENT(S) ===`);
-  
-  // Mark wheels as used and ECLIPSE if applicable
-  gameState.placementState.pendingPlacements.forEach(placement => {
-    currentPlayer.usedWheels.push(placement.wheelIndex);
-    
-    if (currentPlayer.wheels[placement.wheelIndex] === 'ECLIPSE') {
-      currentPlayer.eclipseUsed = true;
-    }
-    
-    console.log(`✓ ${placement.tileType} validated on cell ${placement.cellIndex} (wheel ${placement.wheelIndex})`);
-  });
-  
-  // Resolve combat
-  resolveCombat();
-  
-  // Reset placement state
-  gameState.placementState.pendingPlacements = [];
-  gameState.placementState.selectedWheel = null;
-  gameState.placementState.adjacentHighlighted = [];
-  gameState.placementState.canPlaceSecond = false;
-  
-  // Reset special effects state (effects are now permanent)
-  gameState.placementState.wardTargets = [];
-  gameState.placementState.hexChoices = [];
-  gameState.placementState.eclipseChoices = [];
-  
-  return true;
-}
-
-function canValidateTurn() {
-  return gameState.placementState.pendingPlacements.length > 0 && areSpecialEffectsResolved();
-}
-
-// ===== AI FUNCTIONS (Enhanced) =====
-
-function aiPlaceTiles() {
+  // Simple AI: place random tiles
   const availableWheels = [];
   for (let i = 0; i < 5; i++) {
     if (!gameState.players[1].usedWheels.includes(i)) {
       availableWheels.push(i);
     }
   }
-  
-  if (availableWheels.length === 0) return false;
-  
+
   const emptyCells = [];
   for (let i = 0; i < 9; i++) {
     if (isCellEmpty(i)) emptyCells.push(i);
   }
-  
-  if (emptyCells.length === 0) return false;
-  
-  // Place first tile
-  const firstWheel = availableWheels[0];
-  const firstCell = emptyCells[Math.floor(Math.random() * emptyCells.length)];
-  
-  gameState.placementState.selectedWheel = firstWheel;
-  placeSelectedWheel(firstCell);
-  
-  // Handle AI special effects
-  setTimeout(() => {
-    aiResolveSpecialEffects();
-    
-    // Try second tile
-    const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
-    if (maxTiles > 1 && availableWheels.length > 1 && gameState.placementState.adjacentHighlighted.length > 0) {
-      const secondWheel = availableWheels[1];
-      const adjacentOptions = gameState.placementState.adjacentHighlighted;
-      const secondCell = adjacentOptions[Math.floor(Math.random() * adjacentOptions.length)];
-      
-      gameState.placementState.selectedWheel = secondWheel;
-      placeSelectedWheel(secondCell);
-      
-      setTimeout(() => {
-        aiResolveSpecialEffects();
-        setTimeout(() => {
-          validatePlacements();
-          setTimeout(() => nextPlayer(), 1000);
-        }, 1000);
-      }, 1000);
-    } else {
-      setTimeout(() => {
-        validatePlacements();
-        setTimeout(() => nextPlayer(), 1000);
-      }, 1000);
-    }
-  }, 1000);
-  
-  return true;
-}
 
-function aiResolveSpecialEffects() {
-  // AI automatically resolves special effects
-  
-  // Handle WARD targeting
-  if (gameState.placementState.awaitingWardTarget) {
-    const wardState = gameState.placementState.awaitingWardTarget;
-    if (wardState.availableTargets.length > 0) {
-      const randomTarget = wardState.availableTargets[Math.floor(Math.random() * wardState.availableTargets.length)];
-      selectWardTarget(wardState.tileCell, randomTarget);
-    }
-  }
-  
-  // Handle HEX choice
-  if (gameState.placementState.awaitingHexChoice) {
-    const hexState = gameState.placementState.awaitingHexChoice;
-    
-    // AI prefers curse over trap (60% chance if both available)
-    const hasCurseTargets = hexState.curseTargets.length > 0;
-    const hasTrapTargets = hexState.trapTargets.length > 0;
-    
-    if (hasCurseTargets && (!hasTrapTargets || Math.random() < 0.6)) {
-      const randomTarget = hexState.curseTargets[Math.floor(Math.random() * hexState.curseTargets.length)];
-      selectHexTarget(hexState.tileCell, randomTarget, HEX_MODES.CURSE);
-    } else if (hasTrapTargets) {
-      const randomTarget = hexState.trapTargets[Math.floor(Math.random() * hexState.trapTargets.length)];
-      selectHexTarget(hexState.tileCell, randomTarget, HEX_MODES.TRAP);
-    }
-  }
-  
-  // Handle ECLIPSE choice
-  if (gameState.placementState.awaitingEclipseChoice) {
-    const eclipseState = gameState.placementState.awaitingEclipseChoice;
-    const affinities = ['ATK', 'HEX', 'WARD'];
-    const randomAffinity = affinities[Math.floor(Math.random() * affinities.length)];
-    selectEclipseAffinity(eclipseState.tileCell, randomAffinity);
-    
-    // If ECLIPSE became WARD or HEX, resolve those effects too
-    setTimeout(() => aiResolveSpecialEffects(), 500);
-  }
-}
+  if (availableWheels.length > 0 && emptyCells.length > 0) {
+    // Place first tile
+    const wheelIndex = availableWheels[0];
+    const cellIndex = emptyCells[Math.floor(Math.random() * emptyCells.length)];
+    const tileType = gameState.players[1].wheels[wheelIndex];
 
-// ===== TURN MANAGEMENT =====
+    const tile = {
+      player: 2,
+      type: tileType,
+      originalType: tileType,
+      wheelIndex: wheelIndex,
+      shields: 0,
+      cursed: false,
+      trapToken: null
+    };
 
-function nextPlayer() {
-  console.log(`\n=== END OF PLAYER ${gameState.currentPlayer} TURN ===`);
-  
-  if (gameState.currentPlayer === 1) {
-    gameState.currentPlayer = 2;
+    gameState.board[cellIndex] = tile;
+    gameState.players[1].usedWheels.push(wheelIndex);
+
+    // Handle AI special effects simply
+    if (tileType === 'WARD') {
+      tile.shields = 1; // Just self-shield for AI
+    } else if (tileType === 'HEX') {
+      // AI prefers traps
+      const adjacentEmpty = getAdjacentCells(cellIndex).filter(cell => isCellEmpty(cell));
+      if (adjacentEmpty.length > 0) {
+        gameState.traps = gameState.traps.filter(t => t.player !== 2);
+        gameState.traps.push({
+          cell: adjacentEmpty[0],
+          player: 2
+        });
+        addMessage(`AI placed trap on cell ${adjacentEmpty[0]}`, 'effect');
+      }
+    } else if (tileType === 'ECLIPSE') {
+      // AI chooses random affinity
+      const affinities = ['ATK', 'HEX', 'WARD'];
+      tile.type = affinities[Math.floor(Math.random() * affinities.length)];
+      if (tile.type === 'WARD') {
+        tile.shields = 1;
+      }
+      gameState.players[1].eclipseUsed = true;
+    }
+
+    addMessage(`AI placed ${tileType} on cell ${cellIndex}`, 'info');
+
+    resolveCombatSimultaneous();
+
+    // Next turn
+    setTimeout(() => {
+      gameState.currentPlayer = 1;
+      gameState.currentTurn++;
+
+      if (gameState.currentTurn > 3) {
+        endRound();
+      } else {
+        // Reset for new turn
+        gameState.phase = 'reroll';
+        addMessage(`Turn ${gameState.currentTurn} - Your turn!`, 'info');
+      }
+
+      updateUI();
+    }, 1500);
   } else {
+    // AI can't play, skip
     gameState.currentPlayer = 1;
-    gameState.currentTurn++;
-    
-    if (gameState.currentTurn > 3) {
-      endRound();
-      return;
-    }
+    addMessage('AI cannot play, skipping turn', 'info');
+    updateUI();
   }
-  
-  startNewTurn();
-}
 
-function startNewTurn() {
-  console.log(`\n=== START TURN ${gameState.currentTurn} - PLAYER ${gameState.currentPlayer} ===`);
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  currentPlayer.selectedWheels = [];
-  currentPlayer.rerollsUsed = 0;
-  
-  // Reset placement state completely
-  gameState.placementState = {
-    selectedWheel: null,
-    pendingPlacements: [],
-    tilesPlacedThisTurn: 0,
-    canPlaceSecond: false,
-    adjacentHighlighted: [],
-    awaitingWardTarget: null,
-    awaitingHexChoice: null,
-    awaitingEclipseChoice: null,
-    wardTargets: [],
-    hexChoices: [],
-    eclipseChoices: []
-  };
-  
-  if (gameState.currentTurn === 1) {
-    gameState.phase = 'reroll';
-    gameState.firstTurnAutoReroll = true;
-    executeFirstTurnAutoReroll();
-  } else {
-    gameState.phase = 'reroll';
-    
-    if (currentPlayer.isHuman) {
-      console.log('Human player - Optional reroll phase');
-    } else {
-      setTimeout(() => aiDecideReroll(), 500);
-    }
-  }
-}
-
-function startPlacementPhase() {
-  gameState.phase = 'place';
-  console.log(`\n=== PLACEMENT PHASE - PLAYER ${gameState.currentPlayer} ===`);
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
-  
-  console.log(`Can place up to ${maxTiles} tile(s)`);
-  console.log('Workflow: 1) Select a wheel, 2) Select a cell, 3) Resolve special effects');
-  
-  if (!currentPlayer.isHuman) {
-    console.log('AI is playing...');
-    setTimeout(() => aiPlaceTiles(), 1000);
-  }
+  updateUI();
 }
 
 function endRound() {
-  console.log(`\n=== END OF ROUND ${gameState.currentRound} ===`);
-  
   const p1Tiles = gameState.board.filter(tile => tile && tile.player === 1).length;
   const p2Tiles = gameState.board.filter(tile => tile && tile.player === 2).length;
-  
+
   gameState.scores[0] += p1Tiles;
   gameState.scores[1] += p2Tiles;
-  
-  console.log(`Points this round: P1=${p1Tiles}, P2=${p2Tiles}`);
-  console.log(`Total scores: P1=${gameState.scores[0]}, P2=${gameState.scores[1]}`);
-  
+
+  addMessage(`Round ${gameState.currentRound} ended! P1: +${p1Tiles}, P2: +${p2Tiles}`, 'info');
+  addMessage(`Total scores - P1: ${gameState.scores[0]}, P2: ${gameState.scores[1]}`, 'info');
+
   if (gameState.scores[0] >= 9 || gameState.scores[1] >= 9 || gameState.currentRound >= 3) {
     endGame();
     return;
   }
-  
+
+  // Start new round
   gameState.currentRound++;
   gameState.currentTurn = 1;
   gameState.currentPlayer = 1;
-  
+  gameState.rerollsLeft = { 1: 2, 2: 2 };
+  gameState.rerollUsedThisTurn = false;
+  gameState.phase = 'place';
+
+  // Reset board
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
-  gameState.pendingCurses = [];
-  gameState.combatLog = [];
-  
+
+  // Reset players
   gameState.players.forEach(player => {
-    player.selectedWheels = [];
     player.usedWheels = [];
     player.rerollsUsed = 0;
     player.eclipseUsed = false;
-    player.omenUsed = false;
-    
-    player.wheels = [];
+
+    // Generate new wheels
     for (let i = 0; i < 5; i++) {
-      player.wheels.push(rollWheel(gameState.players.indexOf(player), i));
+      const types = ['ATK', 'HEX', 'WARD'];
+      if (!player.eclipseUsed && Math.random() < 0.2) {
+        types.push('ECLIPSE');
+      }
+      player.wheels[i] = types[Math.floor(Math.random() * types.length)];
     }
   });
-  
-  startNewRound();
+
+  addMessage(`Round ${gameState.currentRound} started!`, 'info');
+  updateUI();
 }
 
 function endGame() {
-  console.log('\n=== END OF GAME ===');
-  
   gameState.gameOver = true;
-  
+
+  let winner = '';
   if (gameState.scores[0] > gameState.scores[1]) {
-    console.log(`🏆 Player 1 wins with ${gameState.scores[0]} points!`);
+    winner = 'Player 1 wins!';
   } else if (gameState.scores[1] > gameState.scores[0]) {
-    console.log(`🏆 Player 2 wins with ${gameState.scores[1]} points!`);
+    winner = 'Player 2 wins!';
   } else {
-    console.log(`🤝 Tie with ${gameState.scores[0]} points each!`);
+    winner = 'It\'s a tie!';
   }
+
+  addMessage(`🏆 GAME OVER! ${winner}`, 'info');
+  addMessage(`Final scores - P1: ${gameState.scores[0]}, P2: ${gameState.scores[1]}`, 'info');
+
+  // Disable all controls
+  document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
+  updateUI();
 }
 
-// ===== HELPER FUNCTIONS =====
-
-function rollWheel(playerIndex, wheelIndex) {
-  const player = gameState.players[playerIndex];
-  const availableTypes = ['ATK', 'HEX', 'WARD'];
-  
-  if (!player.eclipseUsed && Math.random() < ECLIPSE_PROBABILITY) {
-    availableTypes.push('ECLIPSE');
-  }
-  
-  return availableTypes[Math.floor(Math.random() * availableTypes.length)];
+function addMessage(text, type = 'info') {
+  const messagesEl = document.getElementById('messageLog');
+  const messageEl = document.createElement('div');
+  messageEl.className = `message ${type}`;
+  messageEl.textContent = `${new Date().toLocaleTimeString()}: ${text}`;
+  messagesEl.appendChild(messageEl);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function executeFirstTurnAutoReroll() {
-  if (!gameState.firstTurnAutoReroll) return;
-  
-  const currentPlayer = gameState.players[gameState.currentPlayer - 1];
-  
-  for (let i = 0; i < 5; i++) {
-    if (!currentPlayer.usedWheels.includes(i)) {
-      currentPlayer.wheels[i] = rollWheel(gameState.currentPlayer - 1, i);
-    }
-  }
-  
-  currentPlayer.rerollsUsed = 1;
-  gameState.firstTurnAutoReroll = false;
-  startPlacementPhase();
-}
-
-function aiDecideReroll() {
-  console.log('AI decides not to reroll');
-  startPlacementPhase();
-}
-
-function startNewRound() {
-  startNewTurn();
-}
-
-// ===== DEBUG FUNCTIONS =====
-
-function debugGameState() {
-  console.log('\n=== GAME STATE DEBUG ===');
-  console.log(`Round: ${gameState.currentRound}, Turn: ${gameState.currentTurn}, Player: ${gameState.currentPlayer}`);
-  console.log(`Phase: ${gameState.phase}`);
-  console.log(`Scores: P1=${gameState.scores[0]}, P2=${gameState.scores[1]}`);
-  
-  console.log('\nBoard:');
-  for (let row = 0; row < 3; row++) {
-    let rowStr = '';
-    for (let col = 0; col < 3; col++) {
-      const cellIndex = row * 3 + col;
-      const tile = gameState.board[cellIndex];
-      if (tile) {
-        const shieldStr = tile.shields > 0 ? `+${tile.shields}` : '';
-        rowStr += `P${tile.player}${tile.type.charAt(0)}${shieldStr} `;
-      } else {
-        // Check for traps
-        const trap = gameState.traps.find(t => t.cell === cellIndex);
-        if (trap) {
-          rowStr += `T${trap.player} `;
-        } else {
-          rowStr += '--- ';
-        }
-      }
-    }
-    console.log(`[${rowStr}]`);
-  }
-  
-  // Show special effects state
-  if (gameState.placementState.awaitingWardTarget) {
-    console.log(`\n🛡️ Awaiting WARD target selection for cell ${gameState.placementState.awaitingWardTarget.tileCell}`);
-    console.log(`Available targets: [${gameState.placementState.awaitingWardTarget.availableTargets.join(', ')}]`);
-  }
-  
-  if (gameState.placementState.awaitingHexChoice) {
-    const hexState = gameState.placementState.awaitingHexChoice;
-    console.log(`\n🔮 Awaiting HEX choice for cell ${hexState.tileCell}`);
-    console.log(`Curse targets: [${hexState.curseTargets.join(', ')}]`);
-    console.log(`Trap targets: [${hexState.trapTargets.join(', ')}]`);
-  }
-  
-  if (gameState.placementState.awaitingEclipseChoice) {
-    console.log(`\n🌙 Awaiting ECLIPSE affinity choice for cell ${gameState.placementState.awaitingEclipseChoice.tileCell}`);
-  }
-  
-  if (gameState.pendingCurses.length > 0) {
-    console.log(`\nPending curses: ${gameState.pendingCurses.length}`);
-    gameState.pendingCurses.forEach((curse, i) => {
-      console.log(`  ${i+1}. Cell ${curse.targetCell} cursed by P${curse.player}`);
-    });
-  }
-  
-  if (gameState.traps.length > 0) {
-    console.log(`\nActive traps:`);
-    gameState.traps.forEach((trap, i) => {
-      console.log(`  ${i+1}. Cell ${trap.cell} trapped by P${trap.player}`);
-    });
-  }
-  
-  if (gameState.combatLog.length > 0) {
-    console.log('\nLast Combat Log:');
-    gameState.combatLog.forEach((entry, i) => {
-      console.log(`  ${i+1}. ${entry.message}`);
-    });
-  }
-}
-
-function debugPlacementState() {
-  console.log('\n=== PLACEMENT STATE ===');
-  console.log(`Phase: ${gameState.phase}`);
-  console.log(`Current player: ${gameState.currentPlayer}`);
-  console.log(`Selected wheel: ${gameState.placementState.selectedWheel}`);
-  console.log(`Pending placements: ${gameState.placementState.pendingPlacements.length}`);
-  
-  gameState.placementState.pendingPlacements.forEach((placement, i) => {
-    console.log(`  ${i+1}. Wheel ${placement.wheelIndex} (${placement.tileType}) → Cell ${placement.cellIndex}`);
-  });
-  
-  console.log(`Adjacent cells: [${gameState.placementState.adjacentHighlighted.join(', ')}]`);
-  console.log(`Can validate: ${canValidateTurn()}`);
-  console.log(`Special effects resolved: ${areSpecialEffectsResolved()}`);
-}
-
-// ===== EXPORTS AND TESTS =====
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = {
-    gameState, selectWheel, placeSelectedWheel, cancelLastPlacement,
-    cancelAllPlacements, validatePlacements, canValidateTurn, nextPlayer,
-    startPlacementPhase, debugGameState, debugPlacementState, 
-    TILE_TYPES, TILE_ICONS, COMBAT_RULES, HEX_MODES,
-    resolveCombat, attemptFlip, doesTileBeat, getCombatPreview,
-    selectWardTarget, selectHexTarget, selectEclipseAffinity,
-    areSpecialEffectsResolved, resetSpecialEffects
-  };
-} else {
-  // Enhanced test with special effects
-  document.addEventListener('DOMContentLoaded', () => {
-    // Simulate game state for testing special effects
-    gameState.currentPlayer = 1;
-    gameState.currentTurn = 2;
-    gameState.players[0].wheels = ['ATK', 'HEX', 'WARD', 'ECLIPSE', 'ATK'];
-    gameState.players[0].usedWheels = [0];
-    
-    // Add some tiles for testing
-    gameState.board[1] = createTile(1, 'ATK', 0); // P1 ATK ally for WARD testing
-    gameState.board[3] = createTile(2, 'HEX', 1); // P2 HEX enemy for testing
-    
-    console.log('🎮 Test of special effects system');
-    debugGameState();
-    startPlacementPhase();
-    
-    setTimeout(() => {
-      console.log('\n--- Test 1: Place WARD and target ally ---');
-      selectWheel(2); // WARD wheel
-      placeSelectedWheel(4); // Center, adjacent to ally at cell 1
-      
-      setTimeout(() => {
-        console.log('Selecting ally at cell 1 as WARD target...');
-        selectWardTarget(4, 1); // Target the ally
-        debugGameState();
-        
-        setTimeout(() => {
-          console.log('\n--- Test 2: Place HEX and choose curse ---');
-          selectWheel(1); // HEX wheel
-          placeSelectedWheel(7); // Bottom row, adjacent to center
-          
-          setTimeout(() => {
-            console.log('Choosing curse mode targeting cell 4...');
-            selectHexTarget(7, 4, HEX_MODES.CURSE); // Curse the WARD
-            debugGameState();
-            
-            setTimeout(() => {
-              console.log('\n--- Test 3: Place ECLIPSE and choose ATK affinity ---');
-              selectWheel(3); // ECLIPSE wheel
-              placeSelectedWheel(5); // Right center
-              
-              setTimeout(() => {
-                console.log('Choosing ATK affinity for ECLIPSE...');
-                selectEclipseAffinity(5, 'ATK');
-                debugGameState();
-                
-                setTimeout(() => {
-                  console.log('\n--- Final: Validate all placements ---');
-                  if (canValidateTurn()) {
-                    validatePlacements();
-                    debugGameState();
-                  } else {
-                    console.log('Cannot validate - special effects still pending');
-                  }
-                }, 2000);
-              }, 1000);
-            }, 1000);
-          }, 1000);
-        }, 1000);
-      }, 1000);
-    }, 1000);
-  });
-}
+// Initialize the game when page loads
+window.onload = function () {
+  initializeUI();
+};
