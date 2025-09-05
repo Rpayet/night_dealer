@@ -133,9 +133,13 @@ function updateGameInfo() {
   document.getElementById('currentRound').textContent = gameState.currentRound;
   document.getElementById('currentTurn').textContent = gameState.currentTurn;
   document.getElementById('currentPlayer').textContent = gameState.currentPlayer;
-  document.getElementById('p1Score').textContent = gameState.scores[0];
-  document.getElementById('p2Score').textContent = gameState.scores[1];
-  document.getElementById('rerollsUsed').textContent = gameState.players[gameState.currentPlayer - 1].rerollsUsed;
+
+  //! visual cap at 9
+  document.getElementById('p1Score').textContent = Math.min(9, gameState.scores[0]);
+  document.getElementById('p2Score').textContent = Math.min(9, gameState.scores[1]);
+
+  const me = gameState.currentPlayer;
+  document.getElementById('rerollsUsed').textContent = (2 - gameState.rerollsLeft[me]);
   document.getElementById('phaseInfo').textContent = `Phase: ${gameState.phase}`;
 }
 
@@ -189,7 +193,7 @@ function updateWheels() {
   for (let i = 0; i < 5; i++) {
     const wheelEl = document.getElementById(`p1-wheel-${i}`);
     const wheel = gameState.players[0].wheels[i];
-    const isUsed = gameState.players[0].usedWheels.includes(i);
+    const isUsed = gameState.players[0].usedWheels.includes(i) || wheelPendingUsed(i);
     const isSelected = gameState.placementState.selectedWheel === i;
 
     wheelEl.textContent = TILE_ICONS[wheel] || '?';
@@ -303,10 +307,14 @@ function updateSpecialEffects() {
 }
 
 // Event handlers
+function wheelPendingUsed(i){
+  return gameState.placementState.pendingPlacements.some(p => p.wheelIndex === i);
+}
+
 function wheelClick(player, wheelIndex) {
   if (player !== 0 || gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
 
-  const isUsed = gameState.players[0].usedWheels.includes(wheelIndex);
+  const isUsed = gameState.players[0].usedWheels.includes(wheelIndex) || wheelPendingUsed(wheelIndex);
   if (isUsed) return;
 
   gameState.placementState.selectedWheel = wheelIndex;
@@ -346,51 +354,39 @@ function cellClick(cellIndex) {
 
 function placeTile(cellIndex) {
   const wheelIndex = gameState.placementState.selectedWheel;
-  const tileType = gameState.players[0].wheels[wheelIndex];
+  let tileType = gameState.players[0].wheels[wheelIndex];
 
-  // Create tile
+  // Only one ECLIPSE per round: any other ECLIPSE becomes ATK
+  if (tileType === 'ECLIPSE' && gameState.players[0].eclipseUsed) {
+    tileType = 'ATK';
+  }
+
   const tile = {
     player: 1,
     type: tileType,
     originalType: tileType,
-    wheelIndex: wheelIndex,
+    wheelIndex,
     shields: 0,
     cursed: false,
     trapToken: null
   };
 
-  // Add to pending placements
-  gameState.placementState.pendingPlacements.push({
-    wheelIndex: wheelIndex,
-    cellIndex: cellIndex,
-    tileType: tileType
-  });
-
-  // Place on board (preview)
+  gameState.placementState.pendingPlacements.push({ wheelIndex, cellIndex, tileType });
   gameState.board[cellIndex] = tile;
   gameState.placementState.selectedWheel = null;
 
   const trappedByOpp = gameState.traps.some(t => t.cell === cellIndex && t.player !== tile.player);
+  gameState.placementState
+    .pendingPlacements[gameState.placementState.pendingPlacements.length - 1]
+    .trapped = trappedByOpp;
 
-  // Memorize info about this placement
-  gameState.placementState.pendingPlacements[gameState.placementState.pendingPlacements.length-1].trapped = trappedByOpp;
-
-  // If trapped: the placement effect is CANCELLED → do not trigger prompts here
+  // Placement effects ONLY if not trapped
   if (!trappedByOpp) {
     if (tileType === 'WARD')      startWardEffect(cellIndex);
     else if (tileType === 'HEX')  startHexEffect(cellIndex);
     else if (tileType === 'ECLIPSE') startEclipseEffect(cellIndex);
   } else {
     addMessage('Trap: placement effect cancelled (flip attempted on validation)', 'effect');
-  }
-
-  // Handle special effects
-  if (tileType === 'WARD') {
-    startWardEffect(cellIndex);
-  } else if (tileType === 'HEX') {
-    startHexEffect(cellIndex);
-  } else if (tileType === 'ECLIPSE') {
-    startEclipseEffect(cellIndex);
   }
 
   updateAdjacentHighlights();
@@ -581,7 +577,6 @@ function validateAction() {
   flips.push(...resolveCombatSimultaneous(me));
 
   // TODO: 5) DELAYED EFFECTS (curses) — to implement for a "cursedBy" marker
-  cursedByTurn = gameState.currentTurn
 
   // 6) Store for defender's Omen
   gameState.lastFlips = flips.slice();
@@ -770,33 +765,45 @@ function simulateAITurn() {
     gameState.board[cellIndex] = tile;
     gameState.players[1].usedWheels.push(wheelIndex);
 
-    // Handle AI special effects simply
-    if (tileType === 'WARD') {
-      tile.shields = 1; // Just self-shield for AI
-    } else if (tileType === 'HEX') {
-      // AI prefers traps
-      const adjacentEmpty = getAdjacentCells(cellIndex).filter(cell => isCellEmpty(cell));
-      if (adjacentEmpty.length > 0) {
-        gameState.traps = gameState.traps.filter(t => t.player !== 2);
-        gameState.traps.push({
-          cell: adjacentEmpty[0],
-          player: 2
-        });
-        addMessage(`AI placed trap on cell ${adjacentEmpty[0]}`, 'effect');
-      }
-    } else if (tileType === 'ECLIPSE') {
-      // AI chooses random affinity
-      const affinities = ['ATK', 'HEX', 'WARD'];
-      tile.type = affinities[Math.floor(Math.random() * affinities.length)];
-      if (tile.type === 'WARD') {
+    const trappedByP1 = gameState.traps.some(t => t.cell === cellIndex && t.player === 1);
+
+    // Cancel placement effects if trapped
+    if (trappedByP1) {
+      addMessage('Trap (P1): AI placement effect cancelled', 'effect');
+    } else {
+      // simple AI effects (current code for WARD/HEX/ECLIPSE) kept here
+      if (tileType === 'WARD') {
         tile.shields = 1;
+      } else if (tileType === 'HEX') {
+        const adjacentEmpty = getAdjacentCells(cellIndex).filter(isCellEmpty);
+        if (adjacentEmpty.length > 0) {
+          gameState.traps = gameState.traps.filter(t => t.player !== 2);
+          gameState.traps.push({ cell: adjacentEmpty[0], player: 2 });
+          addMessage(`AI placed trap on cell ${adjacentEmpty[0]}`, 'effect');
+        }
+      } else if (tileType === 'ECLIPSE') {
+        const affinities = ['ATK','HEX','WARD'];
+        tile.type = affinities[Math.floor(Math.random()*affinities.length)];
+        if (tile.type === 'WARD') tile.shields = 1;
+        gameState.players[1].eclipseUsed = true;
       }
-      gameState.players[1].eclipseUsed = true;
+    }
+
+    // Trigger P1's trap if placed on the trapped cell (flip before RPS)
+    const flips = [];
+    if (trappedByP1) {
+      const idxTrap = gameState.traps.findIndex(t => t.cell === cellIndex && t.player === 1);
+      if (idxTrap >= 0) {
+        if (tile.shields > 0) { tile.shields = 0; addMessage(`Trap blocked by shield on ${cellIndex}`,'combat'); }
+        else { flips.push({idx:cellIndex, from:tile.player, to:1, src:'TRAP'}); tile.player = 1; }
+        gameState.traps.splice(idxTrap, 1);
+      }
     }
 
     addMessage(`AI placed ${tileType} on cell ${cellIndex}`, 'info');
 
-    resolveCombatSimultaneous();
+    const flipsR = resolveCombatSimultaneous(2);
+    gameState.lastFlips = flips.concat(flipsR);
 
     // Next turn
     setTimeout(() => {
@@ -824,48 +831,40 @@ function simulateAITurn() {
 }
 
 function endRound() {
-  const p1Tiles = gameState.board.filter(tile => tile && tile.player === 1).length;
-  const p2Tiles = gameState.board.filter(tile => tile && tile.player === 2).length;
+  const p1Tiles = gameState.board.filter(t => t && t.player === 1).length;
+  const p2Tiles = gameState.board.filter(t => t && t.player === 2).length;
 
-  gameState.scores[0] += p1Tiles;
-  gameState.scores[1] += p2Tiles;
+  // Add points (optional: internal clamp to 9)
+  gameState.scores[0] = Math.min(9, gameState.scores[0] + p1Tiles);
+  gameState.scores[1] = Math.min(9, gameState.scores[1] + p2Tiles);
 
   addMessage(`Round ${gameState.currentRound} ended! P1: +${p1Tiles}, P2: +${p2Tiles}`, 'info');
   addMessage(`Total scores - P1: ${gameState.scores[0]}, P2: ${gameState.scores[1]}`, 'info');
 
+  // End of game?
   if (gameState.scores[0] >= 9 || gameState.scores[1] >= 9 || gameState.currentRound >= 3) {
-    endGame();
-    return;
+    endGame(); return;
   }
 
-  // Start new round
+  // New round
   gameState.currentRound++;
   gameState.currentTurn = 1;
   gameState.currentPlayer = 1;
-  gameState.rerollsLeft = { 1: 2, 2: 2 };
-  gameState.rerollUsedThisTurn = false;
-  gameState.phase = 'place';
 
-  // Reset board
+  // Reset board & round state
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
+  gameState.lastFlips = [];
+  gameState.omen = { 1:0, 2:1 };
+  gameState.rerollsLeft = { 1:2, 2:2 };
+  gameState.rerollUsedThisTurn = false;
 
-  // Reset players
-  gameState.players.forEach(player => {
-    player.usedWheels = [];
-    player.rerollsUsed = 0;
-    player.eclipseUsed = false;
+  // Reset players (used/eclipse) then seed wheels via rollFaces (consistent, 1x ECLIPSE max)
+  gameState.players.forEach(p => { p.usedWheels = []; p.rerollsUsed = 0; p.eclipseUsed = false; });
+  rollFaces(0, false);
+  rollFaces(1, false);
 
-    // Generate new wheels
-    for (let i = 0; i < 5; i++) {
-      const types = ['ATK', 'HEX', 'WARD'];
-      if (!player.eclipseUsed && Math.random() < 0.2) {
-        types.push('ECLIPSE');
-      }
-      player.wheels[i] = types[Math.floor(Math.random() * types.length)];
-    }
-  });
-
+  gameState.phase = 'place'; // T1: initial roll already done
   addMessage(`Round ${gameState.currentRound} started!`, 'info');
   updateUI();
 }
