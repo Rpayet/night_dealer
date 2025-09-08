@@ -12,6 +12,62 @@ const HEX_MODES = {
   TRAP: 'trap'
 };
 
+// ==== Palette & ownership ====
+const OWN_COL = {1:'#4da3ff', 2:'#ff4d4d'};   // blue P1 / red P2
+const ISO_COL = {dark:'#5f5f5fff', dark2:'#181818', hl:'#ffffff'};
+
+// ==== Canvas iso ====
+let iso, ictx;
+let DPR = 1;
+const TILE_W = 128;    // width of the diamond
+const TILE_H = 64;    // height of the diamond
+// origin "by eye" at the center;
+let ORIGIN_X = 160, ORIGIN_Y = 110;
+
+function initIsoCanvas() {
+  iso  = document.getElementById('iso');
+  ictx = iso.getContext('2d', { alpha: true });
+  ictx.imageSmoothingEnabled = false;
+  fitIsoDPI();
+  window.addEventListener('resize', fitIsoDPI, {passive:true});
+  iso.addEventListener('pointerdown', handleIsoPointer);
+}
+
+function fitIsoDPI(){
+  DPR = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = iso.clientWidth || 320, cssH = iso.clientHeight || 240;
+  iso.width  = Math.round(cssW * DPR);
+  iso.height = Math.round(cssH * DPR);
+  // draw in "CSS coordinates" (scale = DPR)
+  ictx.setTransform(DPR,0,0,DPR,0,0);
+  // recalculate origin approximately at the center
+  ORIGIN_X = (cssW/2) | 0;
+  ORIGIN_Y = ((cssH/2) - 20) | 0;
+  drawBoardIso();
+}
+
+// grid (x,y) to diamond center in pixels
+function isoPos(x, y) {
+  return { x: ORIGIN_X + (x - y) * (TILE_W/2), y: ORIGIN_Y + (x + y) * (TILE_H/2) };
+}
+
+function diamondPath(ctx, cx, cy, w=TILE_W, h=TILE_H){
+  ctx.beginPath();
+  ctx.moveTo(cx,      cy - h/2);
+  ctx.lineTo(cx + w/2, cy);
+  ctx.lineTo(cx,      cy + h/2);
+  ctx.lineTo(cx - w/2, cy);
+  ctx.closePath();
+}
+
+function pointInDiamond(px, py, cx, cy, w=TILE_W, h=TILE_H){
+  const dx = Math.abs(px - cx);
+  const dy = Math.abs(py - cy);
+  // L1 norm in a normalized coordinate system
+  return (dx/(w/2) + dy/(h/2)) <= 1;
+}
+
+
 // Simplified game state for UI
 let gameState = {
   currentPlayer: 1,
@@ -85,17 +141,9 @@ function applyOmenOn(idx){
 }
 
 function createBoard() {
-  const board = document.getElementById('gameBoard');
-  board.innerHTML = '';
-
-  for (let i = 0; i < 9; i++) {
-    const cell = document.createElement('div');
-    cell.className = 'cell';
-    cell.id = `cell-${i}`;
-    cell.onclick = () => cellClick(i);
-    board.appendChild(cell);
-  }
+  initIsoCanvas(); // initialize the iso canvas
 }
+
 
 function createWheels() {
   // Player 1 wheels
@@ -143,47 +191,109 @@ function updateGameInfo() {
   document.getElementById('phaseInfo').textContent = `Phase: ${gameState.phase}`;
 }
 
-function updateBoard() {
-  for (let i = 0; i < 9; i++) {
-    const cellEl = document.getElementById(`cell-${i}`);
-    const tile = gameState.board[i];
+function drawBoardIso(){
+  //TODO: transparent background: the decor (lantern, cats) can be drawn behind later
+  ictx.clearRect(0,0,iso.width/DPR,iso.height/DPR);
 
-    cellEl.innerHTML = '';
-    cellEl.className = 'cell';
+  // 1) checkerboard background (2 tones)
+  for (let y=0;y<3;y++){
+    for (let x=0;x<3;x++){
+      const {x:cx, y:cy} = isoPos(x,y);
+      diamondPath(ictx, cx, cy);
+      ictx.fillStyle = ((x+y)&1) ? ISO_COL.dark2 : ISO_COL.dark;
+      ictx.fill();
+    }
+  }
 
-    // Check if highlighted
-    if (gameState.placementState.adjacentHighlighted.includes(i)) {
-      cellEl.classList.add('highlighted');
+  // 2) adjacency highlights for possible second placement
+  if (gameState.placementState.adjacentHighlighted?.length){
+    for (const i of gameState.placementState.adjacentHighlighted){
+      const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+      diamondPath(ictx, cx, cy);
+      ictx.lineWidth = 2;
+      ictx.setLineDash([4,3]);
+      ictx.strokeStyle = ISO_COL.hl;
+      ictx.stroke();
+      ictx.setLineDash([]);
+    }
+  }
+
+  // 3) placed tiles (temporary emoji) + owned outline + shields
+  for (let i=0;i<9;i++){
+    const t = gameState.board[i]; if (!t) continue;
+    const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+
+    // icon
+    ictx.font = '16px system-ui, sans-serif';
+    ictx.textAlign = 'center';
+    ictx.textBaseline = 'middle';
+    ictx.fillStyle = '#e6e6e6';
+    ictx.fillText(TILE_ICONS[t.type], cx, cy-2);
+
+    // shield (small square at top-right)
+    if (t.shields>0){
+      ictx.fillStyle = '#3BA7A9';
+      ictx.fillRect(cx + (TILE_W/2 - 10), cy - (TILE_H/2) + 4, 6, 6);
     }
 
-    // Check if pending
-    const pending = gameState.placementState.pendingPlacements.find(p => p.cellIndex === i);
-    if (pending) {
-      cellEl.classList.add('pending');
+    // ownership outline
+    diamondPath(ictx, cx, cy);
+    ictx.lineWidth = 2;
+    ictx.strokeStyle = OWN_COL[t.player];
+    ictx.stroke();
+  }
+
+  // 4) traps (on empty cells)
+  for (let i=0;i<9;i++){
+    const trap = gameState.traps.find(t => t.cell===i);
+    if (!trap) continue;
+    const hasTile = !!gameState.board[i];
+    if (hasTile) continue;
+
+    const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+    ictx.beginPath();
+    ictx.arc(cx, cy, 6, 0, Math.PI*2);
+    ictx.fillStyle = '#E2C044'; // lantern amber
+    ictx.globalAlpha = 0.85;
+    ictx.fill();
+    ictx.globalAlpha = 1;
+    ictx.lineWidth = 1;
+    ictx.strokeStyle = '#5b4511';
+    ictx.stroke();
+  }
+
+  // 5) flash on this turn's flips (lastFlips)
+  if (gameState.lastFlips?.length){
+    for (const f of gameState.lastFlips){
+      const i=f.idx, x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+      diamondPath(ictx, cx, cy);
+      ictx.lineWidth = 3;
+      ictx.globalAlpha = 0.7;
+      ictx.strokeStyle = OWN_COL[f.to];
+      ictx.stroke();
+      ictx.globalAlpha = 1;
     }
+  }
+}
 
-    if (tile) {
-      const tileEl = document.createElement('div');
-      tileEl.className = `tile player${tile.player}`;
-      tileEl.textContent = TILE_ICONS[tile.type];
-      cellEl.appendChild(tileEl);
+// wrapper
+function updateBoard() { drawBoardIso(); }
 
-      // Show shields
-      if (tile.shields > 0) {
-        const shieldEl = document.createElement('div');
-        shieldEl.className = 'shields';
-        shieldEl.textContent = tile.shields;
-        cellEl.appendChild(shieldEl);
+function handleIsoPointer(ev){
+  const rect = iso.getBoundingClientRect();
+  // coordinates in CSS pixels (not physical pixels)
+  const px = ev.clientX - rect.left;
+  const py = ev.clientY - rect.top;
+
+  for (let y=0;y<3;y++){
+    for (let x=0;x<3;x++){
+      const {x:cx, y:cy} = isoPos(x,y);
+      if (pointInDiamond(px, py, cx, cy)) {
+        const idx = y*3 + x;
+        cellClick(idx);
+        drawBoardIso(); // rerender
+        return;
       }
-    }
-
-    // Show traps
-    const trap = gameState.traps.find(t => t.cell === i);
-    if (trap && !tile) {
-      const trapEl = document.createElement('div');
-      trapEl.className = 'trap';
-      trapEl.textContent = '⭕';
-      cellEl.appendChild(trapEl);
     }
   }
 }
