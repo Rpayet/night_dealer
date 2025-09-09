@@ -26,6 +26,8 @@ let ORIGIN_X = 160, ORIGIN_Y = 110;
 
 function initIsoCanvas() {
   iso  = document.getElementById('iso');
+  if (!iso) { console.warn('Canvas #iso not found'); return; } // avoid a silent crash
+  ictx = iso.getContext('2d', { alpha: true });
   ictx = iso.getContext('2d', { alpha: true });
   ictx.imageSmoothingEnabled = false;
   fitIsoDPI();
@@ -109,6 +111,14 @@ gameState.lastFlips = [];           // [{idx, from, to, src:'RPS'|'TRAP'|'CURSE'
 gameState.omen = { 1: 0, 2: 1 };      // P2 gets 1 Omen per round
 gameState.rerollsLeft = { 1: 2, 2: 2 }; // 2 rerolls remaining (the initial roll in T1 does not count)
 gameState.rerollUsedThisTurn = false; // max 1 per turn (T2/T3)
+gameState.turnSerial = 0; // +1 at each turn validation (P1 then P2, etc.)
+
+function armCurse(targetCell, byPlayer){
+  const t = gameState.board[targetCell];
+  if (!t) return;
+  // arm the curse: triggers at the end of the next turn of the targeted player
+  t.cursed = { by: byPlayer, triggerOn: gameState.turnSerial + 1 };
+}
 
 // UI State
 let selectedCell = null;
@@ -193,7 +203,9 @@ function updateGameInfo() {
 
 function drawBoardIso(){
   //TODO: transparent background: the decor (lantern, cats) can be drawn behind later
-  ictx.clearRect(0,0,iso.width/DPR,iso.height/DPR);
+  ictx.setTransform(1,0,0,1,0,0);
+  ictx.clearRect(0,0,iso.width, iso.height);
+  ictx.setTransform(DPR,0,0,DPR,0,0);
 
   // 1) checkerboard background (2 tones)
   for (let y=0;y<3;y++){
@@ -517,7 +529,10 @@ function startWardEffect(cellIndex) {
 
   if (adjacentAllies.length === 0) {
     // No allies, just shield self
-    gameState.board[cellIndex].shields = 1;
+    const self = gameState.board[cellIndex];
+    self.shields = 1;
+    // ✨ cleanse if cursed
+    if (self.cursed) { self.cursed = null; addMessage('CURSE cleansed by WARD', 'effect'); }
     addMessage('WARD: Self-shield applied', 'effect');
   } else {
     // Multiple targets, need choice
@@ -562,20 +577,25 @@ function startEclipseEffect(cellIndex) {
 }
 
 function handleWardTarget(wardCell, targetCell) {
-  gameState.board[wardCell].shields = 1;
-  gameState.board[targetCell].shields = 1;
+  const ward = gameState.board[wardCell];
+  const ally = gameState.board[targetCell];
+  ward.shields = 1;
+  ally.shields = 1;
+  // cleanse if cursed
+  if (ally.cursed) { ally.cursed = null; addMessage(`CURSE on ${targetCell} cleansed by WARD`, 'effect'); }
   gameState.placementState.awaitingWardTarget = null;
 
   addMessage(`WARD: Shields applied to ward and ally at ${targetCell}`, 'effect');
   updateUI();
 }
 
+
 function handleHexChoice(hexCell, targetCell, mode) {
   if (mode === 'curse') {
     const target = gameState.board[targetCell];
     if (target) {
-      target.cursed = 1; // mark
-      addMessage(`HEX: curse placed on ${targetCell}`, 'effect');
+      armCurse(targetCell, 1);
+      addMessage(`HEX: curse armed on cell ${targetCell}`, 'effect');
     }
   } else if (mode === 'trap') {
     // Remove old traps for this player
@@ -695,14 +715,15 @@ function validateAction() {
   gameState.placementState.pendingPlacements = [];
   gameState.placementState.adjacentHighlighted = [];
   gameState.rerollUsedThisTurn = false; // new turn, reroll possible (if T2/T3)
-
+  gameState.turnSerial++;              
+  resolveCursesForPlayer(1);           // if P1 was cursed and did not protect
   addMessage('Turn validated. Resolution done.', 'combat');
+
 
   // 8) Switch to AI turn (defender's turn start = Omen possible)
   gameState.currentPlayer = 2;
 
   // AI Omen (optional). For now, not used automatically.
-  // TODO: Choose the most "central" flip to cancel here.
 
   addMessage('AI turn...', 'info');
   updateUI();
@@ -834,6 +855,33 @@ function resolveCombatSimultaneous(activePlayer){
     else if (p2>p1 && T.player!==2){ flips.push({idx:j,from:T.player,to:2,src:'RPS'}); T.player=2; }
   }
   return flips;
+}
+
+function resolveCursesForPlayer(endedPlayerId){
+  const flips = [];
+  for (let i=0;i<9;i++){
+    const t = gameState.board[i]; if (!t || !t.cursed) continue;
+    const curse = t.cursed;
+    // ne déclenche que si la case appartient au joueur qui vient de finir SON tour
+    if (t.player === endedPlayerId && gameState.turnSerial >= curse.triggerOn) {
+      if (t.shields > 0) {
+        // par design on a déjà "cleanse" au moment où le shield est posé,
+        // mais par sécurité on laisse le bouclier et on lève la malédiction
+        t.cursed = null;
+        addMessage(`CURSE fizzled on ${i} (shield present)`, 'combat');
+      } else {
+        // flip pour l'auteur de la malédiction
+        const to = curse.by, from = t.player;
+        if (from !== to) {
+          t.player = to;
+          flips.push({ idx:i, from, to, src:'CURSE' });
+          addMessage(`CURSE flipped cell ${i}`, 'combat');
+        }
+        t.cursed = null;
+      }
+    }
+  }
+  if (flips.length) gameState.lastFlips = flips; // visible pour Omen en début du tour suivant
 }
 
 function cloneBoard(src){
@@ -1030,6 +1078,10 @@ function simulateAITurn() {
           if (men>bestMen){ bestMen=men; bestA=a; }
         }
         gameState.board[bestA].shields = (gameState.board[bestA].shields||0)+1;
+        if (gameState.board[bestA].cursed) {
+          gameState.board[bestA].cursed = null;
+          addMessage(`AI cleansed a CURSE on ${bestA}`, 'effect');
+        }
       }
     } else if (tileType === 'HEX') {
       const adj = getAdjacentCells(cellIndex);
@@ -1037,7 +1089,7 @@ function simulateAITurn() {
       const trapTargets  = adj.filter(c => !gameState.board[c]);
       if (curseTargets.length){
         const pick = curseTargets.includes(4) ? 4 : curseTargets[0];
-        if (typeof pick==='number' && gameState.board[pick]) gameState.board[pick].cursed = 1;
+        if (typeof pick==='number' && gameState.board[pick]) armCurse(pick, 2);
         addMessage(`AI cursed cell ${pick}`, 'effect');
       } else if (trapTargets.length){
         gameState.traps = gameState.traps.filter(t => t.player !== 2);
@@ -1072,6 +1124,8 @@ function simulateAITurn() {
 
   const flipsR = resolveCombatSimultaneous(2);
   gameState.lastFlips = flips.concat(flipsR);
+  gameState.turnSerial++;
+  resolveCursesForPlayer(2); // if AI was cursed and did not protect
 
   // Next turn
   setTimeout(() => {
