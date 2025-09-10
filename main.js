@@ -76,7 +76,10 @@ let gameState = {
   currentRound: 1,
   currentTurn: 1,
   scores: [0, 0],
+  roundWins: {1: 0, 2: 0},
+  roundResults: [], 
   board: Array(9).fill(null),
+  turnsTaken: {1: 0, 2: 0},
   players: [
     {
       wheels: ['ATK', 'HEX', 'WARD', 'ATK', 'HEX'],
@@ -112,6 +115,7 @@ gameState.omen = { 1: 0, 2: 1 };      // P2 gets 1 Omen per round
 gameState.rerollsLeft = { 1: 2, 2: 2 }; // 2 rerolls remaining (the initial roll in T1 does not count)
 gameState.rerollUsedThisTurn = false; // max 1 per turn (T2/T3)
 gameState.turnSerial = 0; // +1 at each turn validation (P1 then P2, etc.)
+gameState.firstMoveDone = {1:false, 2:false};
 
 function armCurse(targetCell, byPlayer){
   const t = gameState.board[targetCell];
@@ -128,8 +132,11 @@ let messages = [];
 function initializeUI() {
   createBoard();
   createWheels();
-  updateUI();
-  addMessage('Game initialized. Player 1 starts!', 'info');
+  gameState.currentRound = 1;
+  gameState.roundWins = {1:0, 2:0};
+  gameState.roundResults = [];
+  seedRound();
+  addMessage('Game initialized.', 'info');
 }
 
 function canUseOmenNow(){
@@ -192,9 +199,9 @@ function updateGameInfo() {
   document.getElementById('currentTurn').textContent = gameState.currentTurn;
   document.getElementById('currentPlayer').textContent = gameState.currentPlayer;
 
-  //! visual cap at 9
-  document.getElementById('p1Score').textContent = Math.min(9, gameState.scores[0]);
-  document.getElementById('p2Score').textContent = Math.min(9, gameState.scores[1]);
+  // Display round wins instead of cumulative tile points
+  document.getElementById('p1Score').textContent = gameState.roundWins[1];
+  document.getElementById('p2Score').textContent = gameState.roundWins[2];
 
   const me = gameState.currentPlayer;
   document.getElementById('rerollsUsed').textContent = (2 - gameState.rerollsLeft[me]);
@@ -332,11 +339,12 @@ function updateWheels() {
 function updateControls() {
   const isHumanTurn = gameState.players[gameState.currentPlayer - 1].isHuman;
   const me = gameState.currentPlayer;
-  const canReroll = (gameState.phase === 'reroll') &&
-                    (me === 1) &&
-                    (gameState.currentTurn >= 2) &&
+  const canReroll = (me === 1) &&
+                    (gameState.firstMoveDone?.[me] === true) &&
                     (!gameState.rerollUsedThisTurn) &&
-                    (gameState.rerollsLeft[me] > 0);
+                    (gameState.rerollsLeft[me] > 0) &&
+                    (gameState.phase === 'place') &&
+                    (gameState.placementState.pendingPlacements.length === 0);
 
   const canValidate = gameState.placementState.pendingPlacements.length > 0 &&
     !gameState.placementState.awaitingWardTarget &&
@@ -344,8 +352,8 @@ function updateControls() {
     !gameState.placementState.awaitingEclipseChoice;
 
   document.getElementById('rerollBtn').disabled = !isHumanTurn || !canReroll;
-  document.getElementById('skipRerollBtn').disabled = !isHumanTurn || gameState.phase !== 'reroll';
-  document.getElementById('validateBtn').disabled = !isHumanTurn || !canValidate;
+  const skipBtn = document.getElementById('skipRerollBtn');
+  if (skipBtn) { skipBtn.disabled = true; skipBtn.style.display = 'none'; }  document.getElementById('validateBtn').disabled = !isHumanTurn || !canValidate;
   document.getElementById('cancelBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
   document.getElementById('resetBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
 }
@@ -422,9 +430,15 @@ function updateSpecialEffects() {
     effectsEl.appendChild(optionsEl);
 
   } else {
-    newPromptEl.textContent = gameState.phase === 'reroll' ?
-      'Reroll or skip to placement phase' :
-      'Select wheel, then select cell to place tile';
+    const me = gameState.currentPlayer;
+    const canRerollInfo = (me === 1) &&
+                          (gameState.firstMoveDone?.[me] === true) &&
+                          (!gameState.rerollUsedThisTurn) &&
+                          (gameState.rerollsLeft[me] > 0) &&
+                          (gameState.placementState.pendingPlacements.length === 0);
+    newPromptEl.textContent = canRerollInfo
+      ? 'Select a wheel, then a cell (you may reroll once before placing).'
+      : 'Select a wheel, then select a cell to place tile.';
   }
 }
 
@@ -466,12 +480,17 @@ function cellClick(cellIndex) {
   }
 
   // placement cap: 2 in T1–T2, 1 in T3
-  const maxTiles = (gameState.currentTurn === 3) ? 1 : 2;
+  const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
   if (gameState.placementState.pendingPlacements.length >= maxTiles) {
     addMessage(`Cap reached: ${maxTiles} tile(s) this turn`, 'info');
     return;
   }
   placeTile(cellIndex);
+}
+
+function maxTilesAllowedForPlayer(playerId) {
+  const taken = (gameState.turnsTaken?.[playerId] ?? 0);
+  return taken >= 2 ? 1 : 2;
 }
 
 function placeTile(cellIndex) {
@@ -641,8 +660,10 @@ function rollFaces(playerIndex, onlyUnused = true) {
 
 function rerollAction() {
   const me = gameState.currentPlayer;
-  if (gameState.phase !== 'reroll' || me !== 1) return;
-  if (gameState.currentTurn === 1) { addMessage('T1 = initial roll already done', 'info'); return; }
+  if (me !== 1) return;
+  if (gameState.phase !== 'place') return;
+  if (gameState.placementState.pendingPlacements.length > 0) { addMessage('Cannot reroll after placing', 'info'); return; }
+  if (!gameState.firstMoveDone?.[me]) { addMessage('Reroll not allowed before your first move this round', 'info'); return; }
   if (gameState.rerollUsedThisTurn) { addMessage('Already 1 reroll this turn', 'info'); return; }
   if (gameState.rerollsLeft[me] <= 0) { addMessage('No rerolls left', 'info'); return; }
 
@@ -651,13 +672,6 @@ function rerollAction() {
   gameState.rerollUsedThisTurn = true;
   gameState.phase = 'place';
   addMessage(`Reroll done. Remaining: ${gameState.rerollsLeft[me]}`, 'info');
-  updateUI();
-}
-
-function skipRerollAction() {
-  if (gameState.phase !== 'reroll' || gameState.currentPlayer !== 1) return;
-  gameState.phase = 'place';
-  addMessage('Reroll phase skipped', 'info');
   updateUI();
 }
 
@@ -717,7 +731,10 @@ function validateAction() {
   gameState.rerollUsedThisTurn = false; // new turn, reroll possible (if T2/T3)
   gameState.turnSerial++;              
   resolveCursesForPlayer(1);           // if P1 was cursed and did not protect
+  // mark P1 first move as completed (even if it was technically turn 2 when AI started)
+  if (gameState.firstMoveDone[1] === false) gameState.firstMoveDone[1] = true;
   addMessage('Turn validated. Resolution done.', 'combat');
+  gameState.turnsTaken[1] = (gameState.turnsTaken[1] || 0) + 1;
 
 
   // 8) Switch to AI turn (defender's turn start = Omen possible)
@@ -802,7 +819,7 @@ function updateAdjacentHighlights() {
   gameState.placementState.adjacentHighlighted = [];
 
   if (gameState.placementState.pendingPlacements.length === 1) {
-    const maxTiles = gameState.currentTurn === 3 ? 1 : 2;
+    const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
     if (maxTiles === 2) {
       const firstPlacement = gameState.placementState.pendingPlacements[0];
       const adjacentCells = getAdjacentCells(firstPlacement.cellIndex);
@@ -862,15 +879,13 @@ function resolveCursesForPlayer(endedPlayerId){
   for (let i=0;i<9;i++){
     const t = gameState.board[i]; if (!t || !t.cursed) continue;
     const curse = t.cursed;
-    // ne déclenche que si la case appartient au joueur qui vient de finir SON tour
+    // triggers only if the cell belongs to the player who just finished THEIR turn
     if (t.player === endedPlayerId && gameState.turnSerial >= curse.triggerOn) {
       if (t.shields > 0) {
-        // par design on a déjà "cleanse" au moment où le shield est posé,
-        // mais par sécurité on laisse le bouclier et on lève la malédiction
         t.cursed = null;
         addMessage(`CURSE fizzled on ${i} (shield present)`, 'combat');
       } else {
-        // flip pour l'auteur de la malédiction
+        // flip for the curse's author
         const to = curse.by, from = t.player;
         if (from !== to) {
           t.player = to;
@@ -881,24 +896,24 @@ function resolveCursesForPlayer(endedPlayerId){
       }
     }
   }
-  if (flips.length) gameState.lastFlips = flips; // visible pour Omen en début du tour suivant
+  if (flips.length) gameState.lastFlips = flips; // visible for Omen at the start of the next turn
 }
 
 function cloneBoard(src){
   return src.map(t => t ? {...t} : null);
 }
 
-// Heuristique de score rapide (position + contrôle local)
+// Fast scoring heuristic (position + local control)
 function scoreBoardFor(player, board){
   const center = 4, corners = [0,2,6,8];
   let s = 0;
   for (let i=0;i<9;i++){
     const t = board[i]; if (!t) continue;
     const mult = (t.player===player? 1 : -1);
-    s += mult; // 1 point par case contrôlée
+    s += mult; // 1 point per controlled cell
     if (i===center) s += 2*mult;
     else if (corners.includes(i)) s += 1*mult;
-    // potentiel : nb d’ennemis adjacents battables – menaces subies
+    // potential: number of adjacent enemies beatable – threats suffered
     const neigh = getAdjacentCells(i);
     let beat=0, threat=0;
     for (const j of neigh){
@@ -1031,20 +1046,19 @@ function simulateAITurn() {
 
   // Simple reroll policy: if no move is ≥ to the current state + epsilon, and if AI has rerolls left
   const curScore = scoreBoardFor(2, gameState.board);
-  if (bestScore <= curScore-0.1 && gameState.rerollsLeft[2]>0 && gameState.currentTurn>=2){
-    rollFaces(1, true);
+  // AI may still reroll once per turn, but never on its first move of the round.
+  if (bestScore <= curScore-0.1 && gameState.rerollsLeft[2]>0 && gameState.firstMoveDone[2]===true){    rollFaces(1, true);
     gameState.rerollsLeft[2]--;
     addMessage('AI rerolls its unused wheels…', 'info');
-    // réévalue une fois
     return setTimeout(simulateAITurn, 200);
   }
 
-  // Joue le meilleur coup trouvé
+  // Play the best move found
   const wheelIndex = best.wheelIndex;
   let tileType = best.type;
   const cellIndex = best.cellIndex;
 
-  // place sur le vrai board (miroir de ta logique actuelle)
+  // place on the real board
   const tile = {
     player: 2,
     type: tileType,
@@ -1126,14 +1140,19 @@ function simulateAITurn() {
   gameState.lastFlips = flips.concat(flipsR);
   gameState.turnSerial++;
   resolveCursesForPlayer(2); // if AI was cursed and did not protect
-
+  gameState.turnsTaken[2] = (gameState.turnsTaken[2] || 0) + 1;
+  // mark AI first move as completed
+  if (gameState.firstMoveDone[2] === false) gameState.firstMoveDone[2] = true;
   // Next turn
   setTimeout(() => {
     gameState.currentPlayer = 1;
     gameState.currentTurn++;
     if (gameState.currentTurn > 3) endRound();
-    else { gameState.phase = 'reroll'; addMessage(`Turn ${gameState.currentTurn} - Your turn!`, 'info'); }
-    updateUI();
+    else {
+      // go straight to placement (no separate reroll phase)
+      gameState.phase = 'place';
+      addMessage(`Turn ${gameState.currentTurn} - Your turn!`, 'info');
+    }    updateUI();
   }, 300);
   updateUI();
 }
@@ -1142,57 +1161,82 @@ function endRound() {
   const p1Tiles = gameState.board.filter(t => t && t.player === 1).length;
   const p2Tiles = gameState.board.filter(t => t && t.player === 2).length;
 
-  // Add points (optional: internal clamp to 9)
-  gameState.scores[0] = Math.min(9, gameState.scores[0] + p1Tiles);
-  gameState.scores[1] = Math.min(9, gameState.scores[1] + p2Tiles);
+  let who = 'TIE';
+  if (p1Tiles > p2Tiles) {
+    gameState.roundWins[1] += 1;
+    who = 'P1';
+    addMessage(`Manche ${gameState.currentRound} : P1 l'emporte (${p1Tiles} vs ${p2Tiles})`, 'info');
+  } else if (p2Tiles > p1Tiles) {
+    gameState.roundWins[2] += 1;
+    who = 'P2';
+    addMessage(`Manche ${gameState.currentRound} : P2 l'emporte (${p2Tiles} vs ${p1Tiles})`, 'info');
+  } else {
+    addMessage(`Manche ${gameState.currentRound} : égalité (${p1Tiles}–${p2Tiles})`, 'info');
+  }
+  gameState.roundResults.push(who);
 
-  addMessage(`Round ${gameState.currentRound} ended! P1: +${p1Tiles}, P2: +${p2Tiles}`, 'info');
-  addMessage(`Total scores - P1: ${gameState.scores[0]}, P2: ${gameState.scores[1]}`, 'info');
-
-  // End of game?
-  if (gameState.scores[0] >= 9 || gameState.scores[1] >= 9 || gameState.currentRound >= 3) {
-    endGame(); return;
+  // early end if someone reaches 2 wins
+  if (gameState.roundWins[1] === 2 || gameState.roundWins[2] === 2) {
+    return endGame();
   }
 
-  // New round
-  gameState.currentRound++;
-  gameState.currentTurn = 1;
-  gameState.currentPlayer = 1;
+  // Maximum 3 rounds
+  if (gameState.currentRound >= 3) {
+    return endGame();
+  }
 
-  // Reset board & round state
+  // next round
+  gameState.currentRound++;
+  seedRound();
+}
+
+function seedRound() {
+  // reset board & round state
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
   gameState.lastFlips = [];
-  gameState.omen = { 1:0, 2:1 };
-  gameState.rerollsLeft = { 1:2, 2:2 };
+  gameState.currentTurn = 1;
+  gameState.rerollsLeft = { 1: 2, 2: 2 };
   gameState.rerollUsedThisTurn = false;
+  gameState.firstMoveDone = {1:false, 2:false};
+  gameState.turnsTaken = { 1: 0, 2: 0 };
 
-  // Reset players (used/eclipse) then seed wheels via rollFaces (consistent, 1x ECLIPSE max)
+  // random wheels for both players (and reset flags)
   gameState.players.forEach(p => { p.usedWheels = []; p.rerollsUsed = 0; p.eclipseUsed = false; });
   rollFaces(0, false);
   rollFaces(1, false);
 
-  gameState.phase = 'place'; // T1: initial roll already done
-  addMessage(`Round ${gameState.currentRound} started!`, 'info');
+  // random draw for the first player
+  const startPlayer = Math.random() < 0.5 ? 1 : 2;
+  gameState.currentPlayer = startPlayer;
+
+  // Omen: 1 for the defender (the one who does NOT start)
+  gameState.omen = startPlayer === 1 ? {1:0, 2:1} : {1:1, 2:0};
+
+  // phase
+  gameState.phase = 'place';
+
+  addMessage(`Nouvelle manche (${gameState.currentRound}) — J${startPlayer} commence`, 'info');
   updateUI();
+
+  if (startPlayer === 2) setTimeout(simulateAITurn, 300);
 }
 
 function endGame() {
   gameState.gameOver = true;
 
-  let winner = '';
-  if (gameState.scores[0] > gameState.scores[1]) {
-    winner = 'Player 1 wins!';
-  } else if (gameState.scores[1] > gameState.scores[0]) {
-    winner = 'Player 2 wins!';
+  let msg;
+  if (gameState.roundWins[1] > gameState.roundWins[2]) {
+    msg = 'Player 1 wins the match!';
+  } else if (gameState.roundWins[2] > gameState.roundWins[1]) {
+    msg = 'Player 2 wins the match!';
   } else {
-    winner = 'It\'s a tie!';
+    msg = 'Match nul (égalité globale).';
   }
 
-  addMessage(`🏆 GAME OVER! ${winner}`, 'info');
-  addMessage(`Final scores - P1: ${gameState.scores[0]}, P2: ${gameState.scores[1]}`, 'info');
+  addMessage(`🏁 FIN — ${msg}`, 'info');
+  addMessage(`Résultats des manches: ${gameState.roundResults.join(' · ')}`, 'info');
 
-  // Disable all controls
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
   updateUI();
 }
