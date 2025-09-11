@@ -18,6 +18,14 @@ const TILE_W = 128;    // width of the diamond
 const TILE_H = 64;    // height of the diamond
 // origin "by eye" at the center;
 let ORIGIN_X = 160, ORIGIN_Y = 110;
+// Cached board geometry
+const POS = Array(9);        // pixel centers per cell
+const ADJ = Array(9);        // adjacency per cell (precomputed)
+let hoverCell = -1;          // hovered cell index or -1
+let needsRedraw = true;      // render invalidation flag
+
+// Trap index (O(1) lookup by cell). Kept in sync via rebuildTrapIndex().
+let trapByCell = Object.create(null);
 
 function initIsoCanvas() {
   iso  = document.getElementById('iso');
@@ -27,7 +35,12 @@ function initIsoCanvas() {
   fitIsoDPI();
   window.addEventListener('resize', fitIsoDPI, {passive:true});
   iso.addEventListener('pointerdown', handleIsoPointer);
-}
+  iso.addEventListener('pointermove', handleIsoHover);
+  iso.addEventListener('pointerleave', () => { hoverCell = -1; invalidate(); });
+  // Precompute static adjacencies (grid does not change)
+  for (let i=0;i<9;i++) ADJ[i] = computeAdjacency(i);
+  // Start render loop
+  requestAnimationFrame(renderLoop);}
 
 function fitIsoDPI(){
   DPR = Math.max(1, window.devicePixelRatio || 1);
@@ -39,7 +52,9 @@ function fitIsoDPI(){
   // recalculate origin approximately at the center
   ORIGIN_X = (cssW/2) | 0;
   ORIGIN_Y = ((cssH/2) - 20) | 0;
-  drawBoardIso();
+  // Recompute cached pixel centers
+  for (let i=0;i<9;i++){ const x=i%3, y=(i/3)|0; POS[i] = isoPos(x,y); }
+  invalidate();
 }
 
 // grid (x,y) to diamond center in pixels
@@ -63,6 +78,12 @@ function pointInDiamond(px, py, cx, cy, w=TILE_W, h=TILE_H){
   return (dx/(w/2) + dy/(h/2)) <= 1;
 }
 
+// Small render scheduler
+function invalidate(){ needsRedraw = true; }
+function renderLoop(){
+  if (needsRedraw) { drawBoardIso(); needsRedraw = false; }
+  requestAnimationFrame(renderLoop);
+}
 
 // Simplified game state for UI
 let gameState = {
@@ -191,25 +212,22 @@ function updateGameInfo() {
   if (ph) ph.textContent = `Phase: ${gameState.phase}`;}
 
 function drawBoardIso(){
-  //TODO: transparent background: the decor (lantern, cats) can be drawn behind later
-  ictx.setTransform(1,0,0,1,0,0);
-  ictx.clearRect(0,0,iso.width, iso.height);
-  ictx.setTransform(DPR,0,0,DPR,0,0);
+  // Clear canvas (stay in CSS coordinates due to setTransform set in fitIsoDPI)
+  ictx.clearRect(0,0,iso.width/DPR, iso.height/DPR);
 
   // 1) checkerboard background (2 tones)
-  for (let y=0;y<3;y++){
-    for (let x=0;x<3;x++){
-      const {x:cx, y:cy} = isoPos(x,y);
-      diamondPath(ictx, cx, cy);
-      ictx.fillStyle = ((x+y)&1) ? ISO_COL.dark2 : ISO_COL.dark;
-      ictx.fill();
-    }
+  for (let i=0;i<9;i++){
+      const {x:cx, y:cy} = POS[i];
+      const x=i%3, y=(i/3)|0;
+       diamondPath(ictx, cx, cy);
+       ictx.fillStyle = ((x+y)&1) ? ISO_COL.dark2 : ISO_COL.dark;
+       ictx.fill();
   }
 
   // 2) adjacency highlights for possible second placement
   if (gameState.placementState.adjacentHighlighted?.length){
     for (const i of gameState.placementState.adjacentHighlighted){
-      const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+      const {x:cx, y:cy} = POS[i];
       diamondPath(ictx, cx, cy);
       ictx.lineWidth = 2;
       ictx.setLineDash([4,3]);
@@ -246,12 +264,12 @@ function drawBoardIso(){
 
   // 4) traps (on empty cells)
   for (let i=0;i<9;i++){
-    const trap = gameState.traps.find(t => t.cell===i);
+    const trap = trapByCell[i];
     if (!trap) continue;
     const hasTile = !!gameState.board[i];
     if (hasTile) continue;
 
-    const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+    const {x:cx, y:cy} = POS[i];
     ictx.beginPath();
     ictx.arc(cx, cy, 6, 0, Math.PI*2);
     ictx.fillStyle = '#E2C044'; // lantern amber
@@ -266,7 +284,7 @@ function drawBoardIso(){
   // 5) flash on this turn's flips (lastFlips)
   if (gameState.lastFlips?.length){
     for (const f of gameState.lastFlips){
-      const i=f.idx, x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
+      const i=f.idx; const {x:cx, y:cy} = POS[i];
       diamondPath(ictx, cx, cy);
       ictx.lineWidth = 3;
       ictx.globalAlpha = 0.7;
@@ -275,10 +293,21 @@ function drawBoardIso(){
       ictx.globalAlpha = 1;
     }
   }
+
+  // 6) hover feedback (only if placement possible)
+  if (hoverCell >= 0) {
+    const {x:cx, y:cy} = POS[hoverCell];
+    diamondPath(ictx, cx, cy);
+    ictx.lineWidth = 2;
+    ictx.setLineDash([3,3]);
+    ictx.strokeStyle = ISO_COL.hl;
+    ictx.stroke();
+    ictx.setLineDash([]);
+  }
 }
 
 // wrapper
-function updateBoard() { drawBoardIso(); }
+function updateBoard() { invalidate(); }
 
 function handleIsoPointer(ev){
   const rect = iso.getBoundingClientRect();
@@ -288,15 +317,37 @@ function handleIsoPointer(ev){
 
   for (let y=0;y<3;y++){
     for (let x=0;x<3;x++){
-      const {x:cx, y:cy} = isoPos(x,y);
+      const {x:cx, y:cy} = POS[y*3+x];
       if (pointInDiamond(px, py, cx, cy)) {
         const idx = y*3 + x;
         cellClick(idx);
-        drawBoardIso(); // rerender
+        invalidate();
         return;
       }
     }
   }
+}
+
+function handleIsoHover(ev){
+  // Update hover cell and cursor style (no DOM spam)
+  const rect = iso.getBoundingClientRect();
+  const px = ev.clientX - rect.left;
+  const py = ev.clientY - rect.top;
+  let found = -1;
+  for (let i=0;i<9;i++){
+    const p = POS[i]; if (!p) continue;
+    if (pointInDiamond(px, py, p.x, p.y)) { found = i; break; }
+  }
+  // Only show pointer when the cell is a valid candidate right now
+  const canPlace = (found>=0) && isCellEmpty(found) &&
+                   (gameState.currentPlayer===1) &&
+                   (gameState.phase==='place') &&
+                   (gameState.placementState.selectedWheel !== null) &&
+                   (gameState.placementState.pendingPlacements.length===0 ||
+                    gameState.placementState.adjacentHighlighted.includes(found) ||
+                    maxTilesAllowedForPlayer(gameState.currentPlayer)===1);
+  iso.style.cursor = canPlace ? 'pointer' : 'default';
+  if (hoverCell !== (canPlace ? found : -1)) { hoverCell = canPlace ? found : -1; invalidate(); }
 }
 
 function updateWheels() {
@@ -441,6 +492,8 @@ function wheelClick(player, wheelIndex) {
   if (isUsed) return;
 
   gameState.placementState.selectedWheel = wheelIndex;
+  // Refresh adjacency guidance if one tile already staged
+  updateAdjacentHighlights();
   updateUI();
 }
 
@@ -554,8 +607,8 @@ function startHexEffect(cellIndex) {
 
   gameState.placementState.awaitingHexChoice = {
     tileCell: cellIndex,
-    curseTargets: curseTargets,
-    trapTargets: trapTargets
+    curseTargets,
+    trapTargets
   };
 }
 
@@ -590,6 +643,7 @@ function handleHexChoice(hexCell, targetCell, mode) {
     // Remove old traps for this player
     gameState.traps = gameState.traps.filter(t => t.player !== 1);
     gameState.traps.push({ cell: targetCell, player: 1 });
+    rebuildTrapIndex();
   }
 
   gameState.placementState.awaitingHexChoice = null;
@@ -687,6 +741,7 @@ function validateAction() {
         if (T.shields>0) { T.shields=0; }
         else { flips.push({idx:p.cellIndex, from:T.player, to:opp, src:'TRAP'}); T.player = opp; }
         gameState.traps.splice(trapIdx,1); // trap consumed
+        rebuildTrapIndex();
       }
     }
   }
@@ -754,22 +809,19 @@ function isCellEmpty(cellIndex) {
 }
 
 function getAdjacentCells(cellIndex) {
-  const row = Math.floor(cellIndex / 3);
-  const col = cellIndex % 3;
-  const adjacent = [];
+  // Use precomputed adjacency (hot path)
+  return ADJ[cellIndex];
+}
 
-  const directions = [[-1, 0], [0, 1], [1, 0], [0, -1]];
-
-  directions.forEach(([deltaRow, deltaCol]) => {
-    const newRow = row + deltaRow;
-    const newCol = col + deltaCol;
-
-    if (newRow >= 0 && newRow < 3 && newCol >= 0 && newCol < 3) {
-      adjacent.push(newRow * 3 + newCol);
-    }
-  });
-
-  return adjacent;
+function computeAdjacency(cellIndex){
+  const row = (cellIndex/3)|0, col = cellIndex%3;
+  const out = [];
+  const dirs = [[-1,0],[0,1],[1,0],[0,-1]];
+  for (const [dr,dc] of dirs){
+    const r=row+dr, c=col+dc;
+    if (r>=0 && r<3 && c>=0 && c<3) out.push(r*3+c);
+  }
+  return out;
 }
 
 function areAdjacent(cellA, cellB) {
@@ -1088,6 +1140,7 @@ function simulateAITurn() {
       if (tile.shields > 0) { tile.shields = 0; }
       else { flips.push({idx:cellIndex, from:tile.player, to:1, src:'TRAP'}); tile.player = 1; }
       gameState.traps.splice(idxTrap, 1);
+      rebuildTrapIndex();
     }
   }
 
@@ -1175,6 +1228,12 @@ function endGame() {
   gameState.gameOver = true;
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
   updateUI();
+}
+
+// Keep a fast cell->trap index in sync with gameState.traps
+function rebuildTrapIndex(){
+  trapByCell = Object.create(null);
+  for (const t of gameState.traps) trapByCell[t.cell] = t;
 }
 
 // Initialize the game when page loads
