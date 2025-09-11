@@ -7,11 +7,6 @@ const TILE_ICONS = {
   ATK: '⚔️', HEX: '👁️', WARD: '🛡️', ECLIPSE: '🌙'
 };
 
-const HEX_MODES = {
-  CURSE: 'curse',
-  TRAP: 'trap'
-};
-
 // ==== Palette & ownership ====
 const OWN_COL = {1:'#4da3ff', 2:'#ff4d4d'};   // blue P1 / red P2
 const ISO_COL = {dark:'#5f5f5fff', dark2:'#181818', hl:'#ffffff'};
@@ -27,7 +22,6 @@ let ORIGIN_X = 160, ORIGIN_Y = 110;
 function initIsoCanvas() {
   iso  = document.getElementById('iso');
   if (!iso) { console.warn('Canvas #iso not found'); return; } // avoid a silent crash
-  ictx = iso.getContext('2d', { alpha: true });
   ictx = iso.getContext('2d', { alpha: true });
   ictx.imageSmoothingEnabled = false;
   fitIsoDPI();
@@ -351,11 +345,16 @@ function updateControls() {
     !gameState.placementState.awaitingHexChoice &&
     !gameState.placementState.awaitingEclipseChoice;
 
-  document.getElementById('rerollBtn').disabled = !isHumanTurn || !canReroll;
+  const rerollEl = document.getElementById('rerollBtn');
+  if (rerollEl) rerollEl.disabled = !isHumanTurn || !canReroll;
   const skipBtn = document.getElementById('skipRerollBtn');
-  if (skipBtn) { skipBtn.disabled = true; skipBtn.style.display = 'none'; }  document.getElementById('validateBtn').disabled = !isHumanTurn || !canValidate;
-  document.getElementById('cancelBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
-  document.getElementById('resetBtn').disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
+  if (skipBtn) { skipBtn.disabled = true; skipBtn.style.display = 'none'; }
+  const validateEl = document.getElementById('validateBtn');
+  if (validateEl) validateEl.disabled = !isHumanTurn || !canValidate;
+  const cancelEl = document.getElementById('cancelBtn');
+  if (cancelEl) cancelEl.disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
+  const resetEl = document.getElementById('resetBtn');
+  if (resetEl) resetEl.disabled = !isHumanTurn || gameState.placementState.pendingPlacements.length === 0;
 }
 
 function updateSpecialEffects() {
@@ -550,7 +549,7 @@ function startWardEffect(cellIndex) {
     // No allies, just shield self
     const self = gameState.board[cellIndex];
     self.shields = 1;
-    // ✨ cleanse if cursed
+    // cleanse if cursed
     if (self.cursed) { self.cursed = null; addMessage('CURSE cleansed by WARD', 'effect'); }
     addMessage('WARD: Self-shield applied', 'effect');
   } else {
@@ -599,6 +598,7 @@ function handleWardTarget(wardCell, targetCell) {
   const ward = gameState.board[wardCell];
   const ally = gameState.board[targetCell];
   ward.shields = 1;
+  if (ward.cursed) { ward.cursed = null; addMessage(`CURSE cleansed on ward @${wardCell}`, 'effect'); }
   ally.shields = 1;
   // cleanse if cursed
   if (ally.cursed) { ally.cursed = null; addMessage(`CURSE on ${targetCell} cleansed by WARD`, 'effect'); }
