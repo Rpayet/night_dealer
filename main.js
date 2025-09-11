@@ -119,7 +119,6 @@ function armCurse(targetCell, byPlayer){
 }
 
 // UI State
-let selectedCell = null;
 let messages = [];
 
 // Initialize the UI
@@ -130,7 +129,6 @@ function initializeUI() {
   gameState.roundWins = {1:0, 2:0};
   gameState.roundResults = [];
   seedRound();
-  addMessage('Game initialized.', 'info');
 }
 
 function canUseOmenNow(){
@@ -142,12 +140,12 @@ function applyOmenOn(idx){
   const who = gameState.currentPlayer;
   if (!canUseOmenNow()) return false;
   const found = gameState.lastFlips.find(f => f.idx===idx);
-  if (!found) { addMessage('Omen: clicked cell is not from last flip', 'info'); return false; }
+  //TODO : Make an event on UI to alert the player
+  if (!found) { return false; }
   // restore owner
   const T = gameState.board[idx];
   T.player = found.from;
   gameState.omen[who] = 0; // consumed
-  addMessage(`Omen: flip cancelled on ${idx}`, 'combat');
   return true;
 }
 
@@ -166,17 +164,6 @@ function createWheels() {
     wheel.id = `p1-wheel-${i}`;
     wheel.onclick = () => wheelClick(0, i);
     p1Wheels.appendChild(wheel);
-  }
-
-  // Player 2 wheels (hidden for AI)
-  const p2Wheels = document.getElementById('player2Wheels');
-  p2Wheels.innerHTML = '';
-  for (let i = 0; i < 5; i++) {
-    const wheel = document.createElement('div');
-    wheel.className = 'wheel hidden';
-    wheel.id = `p2-wheel-${i}`;
-    wheel.textContent = '?';
-    p2Wheels.appendChild(wheel);
   }
 }
 
@@ -198,9 +185,10 @@ function updateGameInfo() {
   document.getElementById('p2Score').textContent = gameState.roundWins[2];
 
   const me = gameState.currentPlayer;
-  document.getElementById('rerollsUsed').textContent = (2 - gameState.rerollsLeft[me]);
-  document.getElementById('phaseInfo').textContent = `Phase: ${gameState.phase}`;
-}
+  const rr = document.getElementById('rerollsUsed');
+  if (rr) rr.textContent = (2 - gameState.rerollsLeft[me]);
+  const ph = document.getElementById('phaseInfo');
+  if (ph) ph.textContent = `Phase: ${gameState.phase}`;}
 
 function drawBoardIso(){
   //TODO: transparent background: the decor (lantern, cats) can be drawn behind later
@@ -453,37 +441,14 @@ function wheelClick(player, wheelIndex) {
   if (isUsed) return;
 
   gameState.placementState.selectedWheel = wheelIndex;
-  addMessage(`Selected wheel ${wheelIndex} (${gameState.players[0].wheels[wheelIndex]})`, 'info');
   updateUI();
 }
 
 function cellClick(cellIndex) {
   if (gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
 
-  if (gameState.placementState.selectedWheel === null) {
-    addMessage('Select a wheel first!', 'info');
-    return;
-  }
-
-  if (!isCellEmpty(cellIndex)) {
-    addMessage('Cell is not empty!', 'info');
-    return;
-  }
-
-  // Check adjacency for second tile
-  if (gameState.placementState.pendingPlacements.length === 1) {
-    if (!gameState.placementState.adjacentHighlighted.includes(cellIndex)) {
-      addMessage('Second tile must be adjacent to first!', 'info');
-      return;
-    }
-  }
-
   // placement cap: 2 in T1–T2, 1 in T3
   const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
-  if (gameState.placementState.pendingPlacements.length >= maxTiles) {
-    addMessage(`Cap reached: ${maxTiles} tile(s) this turn`, 'info');
-    return;
-  }
   placeTile(cellIndex);
 }
 
@@ -525,12 +490,8 @@ function placeTile(cellIndex) {
     if (tileType === 'WARD')      startWardEffect(cellIndex);
     else if (tileType === 'HEX')  startHexEffect(cellIndex);
     else if (tileType === 'ECLIPSE') startEclipseEffect(cellIndex);
-  } else {
-    addMessage('Trap: placement effect cancelled (flip attempted on validation)', 'effect');
-  }
-
+  } 
   updateAdjacentHighlights();
-  addMessage(`Placed ${tileType} on cell ${cellIndex}`, 'effect');
   updateUI();
 }
 
@@ -550,8 +511,7 @@ function startWardEffect(cellIndex) {
     const self = gameState.board[cellIndex];
     self.shields = 1;
     // cleanse if cursed
-    if (self.cursed) { self.cursed = null; addMessage('CURSE cleansed by WARD', 'effect'); }
-    addMessage('WARD: Self-shield applied', 'effect');
+    if (self.cursed) { self.cursed = null; }
   } else {
     // Multiple targets, need choice
     gameState.placementState.awaitingWardTarget = {
@@ -575,11 +535,6 @@ function startHexEffect(cellIndex) {
     }
   });
 
-  if (curseTargets.length === 0 && trapTargets.length === 0) {
-    addMessage('HEX: No valid targets', 'effect');
-    return;
-  }
-
   gameState.placementState.awaitingHexChoice = {
     tileCell: cellIndex,
     curseTargets: curseTargets,
@@ -598,13 +553,12 @@ function handleWardTarget(wardCell, targetCell) {
   const ward = gameState.board[wardCell];
   const ally = gameState.board[targetCell];
   ward.shields = 1;
-  if (ward.cursed) { ward.cursed = null; addMessage(`CURSE cleansed on ward @${wardCell}`, 'effect'); }
+  if (ward.cursed) { ward.cursed = null; }
   ally.shields = 1;
   // cleanse if cursed
-  if (ally.cursed) { ally.cursed = null; addMessage(`CURSE on ${targetCell} cleansed by WARD`, 'effect'); }
+  if (ally.cursed) { ally.cursed = null; }
   gameState.placementState.awaitingWardTarget = null;
 
-  addMessage(`WARD: Shields applied to ward and ally at ${targetCell}`, 'effect');
   updateUI();
 }
 
@@ -614,13 +568,11 @@ function handleHexChoice(hexCell, targetCell, mode) {
     const target = gameState.board[targetCell];
     if (target) {
       armCurse(targetCell, 1);
-      addMessage(`HEX: curse armed on cell ${targetCell}`, 'effect');
     }
   } else if (mode === 'trap') {
     // Remove old traps for this player
     gameState.traps = gameState.traps.filter(t => t.player !== 1);
     gameState.traps.push({ cell: targetCell, player: 1 });
-    addMessage(`HEX: Trap placed on cell ${targetCell}`, 'effect');
   }
 
   gameState.placementState.awaitingHexChoice = null;
@@ -630,8 +582,6 @@ function handleHexChoice(hexCell, targetCell, mode) {
 function handleEclipseChoice(eclipseCell, chosenType) {
   gameState.board[eclipseCell].type = chosenType;
   gameState.placementState.awaitingEclipseChoice = null;
-
-  addMessage(`ECLIPSE: Chose ${chosenType} affinity`, 'effect');
 
   // Trigger cascading effects
   if (chosenType === 'WARD') {
@@ -662,16 +612,11 @@ function rerollAction() {
   const me = gameState.currentPlayer;
   if (me !== 1) return;
   if (gameState.phase !== 'place') return;
-  if (gameState.placementState.pendingPlacements.length > 0) { addMessage('Cannot reroll after placing', 'info'); return; }
-  if (!gameState.firstMoveDone?.[me]) { addMessage('Reroll not allowed before your first move this round', 'info'); return; }
-  if (gameState.rerollUsedThisTurn) { addMessage('Already 1 reroll this turn', 'info'); return; }
-  if (gameState.rerollsLeft[me] <= 0) { addMessage('No rerolls left', 'info'); return; }
 
   rollFaces(0, true); // reroll unused wheels for the human player
   gameState.rerollsLeft[me]--;
   gameState.rerollUsedThisTurn = true;
   gameState.phase = 'place';
-  addMessage(`Reroll done. Remaining: ${gameState.rerollsLeft[me]}`, 'info');
   updateUI();
 }
 
@@ -682,7 +627,6 @@ function validateAction() {
   if (gameState.placementState.awaitingWardTarget || 
       gameState.placementState.awaitingHexChoice || 
       gameState.placementState.awaitingEclipseChoice) {
-    addMessage('Resolve special effects first!', 'info');
     return;
   }
 
@@ -710,7 +654,7 @@ function validateAction() {
       const trapIdx = gameState.traps.findIndex(t => t.cell===p.cellIndex && t.player===opp);
       if (trapIdx>=0) {
         const T = gameState.board[p.cellIndex];
-        if (T.shields>0) { T.shields=0; addMessage(`Trap blocked by shield on ${p.cellIndex}`, 'combat'); }
+        if (T.shields>0) { T.shields=0; }
         else { flips.push({idx:p.cellIndex, from:T.player, to:opp, src:'TRAP'}); T.player = opp; }
         gameState.traps.splice(trapIdx,1); // trap consumed
       }
@@ -720,12 +664,10 @@ function validateAction() {
   // 4) SIMULTANEOUS RPS
   flips.push(...resolveCombatSimultaneous(me));
 
-  // TODO: 5) DELAYED EFFECTS (curses) — to implement for a "cursedBy" marker
-
-  // 6) Store for defender's Omen
+  // 5) Store for defender's Omen
   gameState.lastFlips = flips.slice();
 
-  // 7) Reset placement state
+  // 6) Reset placement state
   gameState.placementState.pendingPlacements = [];
   gameState.placementState.adjacentHighlighted = [];
   gameState.rerollUsedThisTurn = false; // new turn, reroll possible (if T2/T3)
@@ -733,16 +675,13 @@ function validateAction() {
   resolveCursesForPlayer(1);           // if P1 was cursed and did not protect
   // mark P1 first move as completed (even if it was technically turn 2 when AI started)
   if (gameState.firstMoveDone[1] === false) gameState.firstMoveDone[1] = true;
-  addMessage('Turn validated. Resolution done.', 'combat');
   gameState.turnsTaken[1] = (gameState.turnsTaken[1] || 0) + 1;
 
 
-  // 8) Switch to AI turn (defender's turn start = Omen possible)
+  // 7) Switch to AI turn (defender's turn start = Omen possible)
   gameState.currentPlayer = 2;
 
   // AI Omen (optional). For now, not used automatically.
-
-  addMessage('AI turn...', 'info');
   updateUI();
 
   setTimeout(simulateAITurn, 800);
@@ -760,7 +699,6 @@ function cancelAction() {
   gameState.placementState.awaitingEclipseChoice = null;
 
   updateAdjacentHighlights();
-  addMessage(`Cancelled placement from cell ${lastPlacement.cellIndex}`, 'info');
   updateUI();
 }
 
@@ -776,7 +714,6 @@ function resetAction() {
   gameState.placementState.awaitingHexChoice = null;
   gameState.placementState.awaitingEclipseChoice = null;
 
-  addMessage('All placements reset', 'info');
   updateUI();
 }
 
@@ -883,14 +820,12 @@ function resolveCursesForPlayer(endedPlayerId){
     if (t.player === endedPlayerId && gameState.turnSerial >= curse.triggerOn) {
       if (t.shields > 0) {
         t.cursed = null;
-        addMessage(`CURSE fizzled on ${i} (shield present)`, 'combat');
       } else {
         // flip for the curse's author
         const to = curse.by, from = t.player;
         if (from !== to) {
           t.player = to;
           flips.push({ idx:i, from, to, src:'CURSE' });
-          addMessage(`CURSE flipped cell ${i}`, 'combat');
         }
         t.cursed = null;
       }
@@ -1007,8 +942,6 @@ function simulateAITurn() {
     if (bestIdx!==null){ applyOmenOn(bestIdx); updateUI(); }
   }
 
-  addMessage('AI is thinking...', 'info');
-
   const P = gameState.players[1];
   const availableWheels = [];
   for (let i=0;i<5;i++) if (!P.usedWheels.includes(i)) availableWheels.push(i);
@@ -1020,7 +953,6 @@ function simulateAITurn() {
   // if no possible move → skip
   if (!availableWheels.length || !empties.length){
     gameState.currentPlayer = 1;
-    addMessage('AI cannot play, skipping turn', 'info');
     updateUI();
     return;
   }
@@ -1049,7 +981,6 @@ function simulateAITurn() {
   // AI may still reroll once per turn, but never on its first move of the round.
   if (bestScore <= curScore-0.1 && gameState.rerollsLeft[2]>0 && gameState.firstMoveDone[2]===true){    rollFaces(1, true);
     gameState.rerollsLeft[2]--;
-    addMessage('AI rerolls its unused wheels…', 'info');
     return setTimeout(simulateAITurn, 200);
   }
 
@@ -1075,7 +1006,6 @@ function simulateAITurn() {
   const trappedByP1 = gameState.traps.some(t => t.cell === cellIndex && t.player === 1);
 
   if (trappedByP1) {
-    addMessage('Trap (P1): AI placement effect cancelled', 'effect');
   } else {
     // simple AI effects
     if (tileType === 'WARD') {
@@ -1094,7 +1024,6 @@ function simulateAITurn() {
         gameState.board[bestA].shields = (gameState.board[bestA].shields||0)+1;
         if (gameState.board[bestA].cursed) {
           gameState.board[bestA].cursed = null;
-          addMessage(`AI cleansed a CURSE on ${bestA}`, 'effect');
         }
       }
     } else if (tileType === 'HEX') {
@@ -1104,7 +1033,6 @@ function simulateAITurn() {
       if (curseTargets.length){
         const pick = curseTargets.includes(4) ? 4 : curseTargets[0];
         if (typeof pick==='number' && gameState.board[pick]) armCurse(pick, 2);
-        addMessage(`AI cursed cell ${pick}`, 'effect');
       } else if (trapTargets.length){
         gameState.traps = gameState.traps.filter(t => t.player !== 2);
         // place a trap as "central" as possible
@@ -1114,7 +1042,6 @@ function simulateAITurn() {
           return pb-pa;
         })[0];
         gameState.traps.push({ cell: bestT, player: 2 });
-        addMessage(`AI placed trap on cell ${bestT}`, 'effect');
       }
     } else if (tileType === 'ECLIPSE') {
       tile.type = bestEclipseType || 'ATK';
@@ -1128,13 +1055,11 @@ function simulateAITurn() {
   if (trappedByP1) {
     const idxTrap = gameState.traps.findIndex(t => t.cell === cellIndex && t.player === 1);
     if (idxTrap >= 0) {
-      if (tile.shields > 0) { tile.shields = 0; addMessage(`Trap blocked by shield on ${cellIndex}`,'combat'); }
+      if (tile.shields > 0) { tile.shields = 0; }
       else { flips.push({idx:cellIndex, from:tile.player, to:1, src:'TRAP'}); tile.player = 1; }
       gameState.traps.splice(idxTrap, 1);
     }
   }
-
-  addMessage(`AI placed ${tileType} on cell ${cellIndex}`, 'info');
 
   const flipsR = resolveCombatSimultaneous(2);
   gameState.lastFlips = flips.concat(flipsR);
@@ -1151,7 +1076,6 @@ function simulateAITurn() {
     else {
       // go straight to placement (no separate reroll phase)
       gameState.phase = 'place';
-      addMessage(`Turn ${gameState.currentTurn} - Your turn!`, 'info');
     }    updateUI();
   }, 300);
   updateUI();
@@ -1165,14 +1089,10 @@ function endRound() {
   if (p1Tiles > p2Tiles) {
     gameState.roundWins[1] += 1;
     who = 'P1';
-    addMessage(`Manche ${gameState.currentRound} : P1 l'emporte (${p1Tiles} vs ${p2Tiles})`, 'info');
   } else if (p2Tiles > p1Tiles) {
     gameState.roundWins[2] += 1;
     who = 'P2';
-    addMessage(`Manche ${gameState.currentRound} : P2 l'emporte (${p2Tiles} vs ${p1Tiles})`, 'info');
-  } else {
-    addMessage(`Manche ${gameState.currentRound} : égalité (${p1Tiles}–${p2Tiles})`, 'info');
-  }
+  } 
   gameState.roundResults.push(who);
 
   // early end if someone reaches 2 wins
@@ -1216,7 +1136,6 @@ function seedRound() {
   // phase
   gameState.phase = 'place';
 
-  addMessage(`Nouvelle manche (${gameState.currentRound}) — J${startPlayer} commence`, 'info');
   updateUI();
 
   if (startPlayer === 2) setTimeout(simulateAITurn, 300);
@@ -1234,20 +1153,8 @@ function endGame() {
     msg = 'Match nul (égalité globale).';
   }
 
-  addMessage(`🏁 FIN — ${msg}`, 'info');
-  addMessage(`Résultats des manches: ${gameState.roundResults.join(' · ')}`, 'info');
-
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
   updateUI();
-}
-
-function addMessage(text, type = 'info') {
-  const messagesEl = document.getElementById('messageLog');
-  const messageEl = document.createElement('div');
-  messageEl.className = `message ${type}`;
-  messageEl.textContent = `${new Date().toLocaleTimeString()}: ${text}`;
-  messagesEl.appendChild(messageEl);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 // Initialize the game when page loads
