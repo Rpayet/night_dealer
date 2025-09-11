@@ -445,10 +445,27 @@ function wheelClick(player, wheelIndex) {
 }
 
 function cellClick(cellIndex) {
+  // Only allow human placement during "place" phase
   if (gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
 
-  // placement cap: 2 in T1–T2, 1 in T3
+  // A wheel must be selected before placing
+  if (gameState.placementState.selectedWheel === null) return;
+
+  // Cell must be empty (and not already staged in pendingPlacements)
+  if (!isCellEmpty(cellIndex)) return;
+
+  // Enforce adjacency for the second placement in T1/T2
+  if (gameState.placementState.pendingPlacements.length === 1) {
+    const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
+    if (maxTiles === 2) {
+      if (!gameState.placementState.adjacentHighlighted.includes(cellIndex)) return;
+    }
+  }
+
+  // Enforce per-turn placement cap (2 in player's first two turns, else 1)
   const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
+  if (gameState.placementState.pendingPlacements.length >= maxTiles) return;
+
   placeTile(cellIndex);
 }
 
@@ -610,13 +627,26 @@ function rollFaces(playerIndex, onlyUnused = true) {
 
 function rerollAction() {
   const me = gameState.currentPlayer;
+
+  // Only human, only during placement phase
   if (me !== 1) return;
   if (gameState.phase !== 'place') return;
 
-  rollFaces(0, true); // reroll unused wheels for the human player
+  // Disallow reroll after placing any tile(s) this turn
+  if (gameState.placementState.pendingPlacements.length > 0) return;
+
+  // Disallow reroll on the player's first move of the round
+  if (!gameState.firstMoveDone?.[me]) return;
+
+  // Max one reroll per turn, and only if any left
+  if (gameState.rerollUsedThisTurn) return;
+  if (gameState.rerollsLeft[me] <= 0) return;
+
+  // Reroll only unused wheels for the human player
+  rollFaces(0, true);
   gameState.rerollsLeft[me]--;
   gameState.rerollUsedThisTurn = true;
-  gameState.phase = 'place';
+  // Phase stays "place"
   updateUI();
 }
 
@@ -1143,16 +1173,6 @@ function seedRound() {
 
 function endGame() {
   gameState.gameOver = true;
-
-  let msg;
-  if (gameState.roundWins[1] > gameState.roundWins[2]) {
-    msg = 'Player 1 wins the match!';
-  } else if (gameState.roundWins[2] > gameState.roundWins[1]) {
-    msg = 'Player 2 wins the match!';
-  } else {
-    msg = 'Match nul (égalité globale).';
-  }
-
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
   updateUI();
 }
