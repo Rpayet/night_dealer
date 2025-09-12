@@ -1,36 +1,26 @@
-// NIGHT DEALER (compact enums)
-const T = { ATK:0, HEX:1, WARD:2, ECLIPSE:3 };           // 0..3
-const ICON = ['⚔️','👁️','🛡️','🌙'];                     // index by T.*
-const BEATS = [T.HEX, T.WARD, T.ATK];                     // who each base type beats (ECLIPSE handled via affinity)
- 
-// ==== Palette & ownership ====
-const OWN_COL = {1:'#4da3ff', 2:'#ff4d4d'};   // blue P1 / red P2
+const T = { ATK:0, HEX:1, WARD:2, ECLIPSE:3 };
+const ICON = ['⚔️','👁️','🛡️','🌙'];
+const BEATS = [T.HEX, T.WARD, T.ATK];
+const OWN_COL = {1:'#4da3ff', 2:'#ff4d4d'};
 const ISO_COL = {dark:'#5f5f5fff', dark2:'#181818', hl:'#ffffff'};
 
 // ==== Canvas iso ====
 let iso, ictx;
 let DPR = 1;
-const TILE_W = 128;    // width of the diamond
-const TILE_H = 64;    // height of the diamond
-// origin "by eye" at the center;
+const TILE_W = 128;
+const TILE_H = 64;
 let ORIGIN_X = 160, ORIGIN_Y = 110;
-// Cached board geometry
-const POS = Array(9);        // pixel centers per cell
-const ADJ = Array(9);        // adjacency per cell (precomputed)
-let hoverCell = -1;          // hovered cell index or -1
-let needsRedraw = true;      // render invalidation flag
-
-// Trap index (O(1) lookup by cell). Kept in sync via rebuildTrapIndex().
+const POS = Array(9);
+let hoverCell = -1;
+let needsRedraw = true;
 let trapByCell = Object.create(null);
-
-// Scratch data for AI to reduce GC
 const SCR = {
-  atk: Array.from({length:9},()=>({p1:0,p2:0})), // reused accumulator
+  atk: Array.from({length:9},()=>({p1:0,p2:0})),
 };
 
 function initIsoCanvas() {
   iso  = document.getElementById('iso');
-  if (!iso) { console.warn('Canvas #iso not found'); return; } // avoid a silent crash
+  if (!iso) { console.warn('Canvas #iso not found'); return; }
   ictx = iso.getContext('2d', { alpha: true });
   ictx.imageSmoothingEnabled = false;
   fitIsoDPI();
@@ -38,9 +28,7 @@ function initIsoCanvas() {
   iso.addEventListener('pointerdown', handleIsoPointer);
   iso.addEventListener('pointermove', handleIsoHover);
   iso.addEventListener('pointerleave', () => { hoverCell = -1; invalidate(); });
-  // Precompute static adjacencies (grid does not change)
   for (let i=0;i<9;i++) ADJ[i] = computeAdjacency(i);
-  // Start render loop
   requestAnimationFrame(renderLoop);
 }
 
@@ -49,14 +37,10 @@ function fitIsoDPI(){
   const cssW = iso.clientWidth || 320, cssH = iso.clientHeight || 240;
   iso.width  = Math.round(cssW * DPR);
   iso.height = Math.round(cssH * DPR);
-  // draw in "CSS coordinates" (scale = DPR)
   ictx.setTransform(DPR,0,0,DPR,0,0);
-  // recalculate origin approximately at the center
   ORIGIN_X = (cssW/2) | 0;
   ORIGIN_Y = ((cssH/2) - 20) | 0;
-  // Recompute cached pixel centers
   for (let i=0;i<9;i++){ const x=i%3, y=(i/3)|0; POS[i] = isoPos(x,y); }
-  // Font is constant; set once per DPI change
   ictx.font = '16px system-ui, sans-serif';
   invalidate();
 }
@@ -78,18 +62,28 @@ function diamondPath(ctx, cx, cy, w=TILE_W, h=TILE_H){
 function pointInDiamond(px, py, cx, cy, w=TILE_W, h=TILE_H){
   const dx = Math.abs(px - cx);
   const dy = Math.abs(py - cy);
-  // L1 norm in a normalized coordinate system
   return (dx/(w/2) + dy/(h/2)) <= 1;
 }
 
-// Small render scheduler
+// ==== Static adjacency (inline, no helper) ====
+const ADJ = [
+  [1,3],
+  [0,2,4],
+  [1,5],
+  [0,4,6],
+  [1,3,5,7],
+  [2,4,8],
+  [3,7],
+  [4,6,8],
+  [5,7]
+];
+
 function invalidate(){ needsRedraw = true; }
 function renderLoop(){
   if (needsRedraw) { drawBoardIso(); needsRedraw = false; }
   requestAnimationFrame(renderLoop);
 }
 
-// Simplified game state for UI
 let gameState = {
   currentPlayer: 1,
   currentRound: 1,
@@ -122,27 +116,24 @@ let gameState = {
     awaitingHexChoice: null,
     awaitingEclipseChoice: null
   },
-  phase: 'place', // Start in place phase for testing
+  phase: 'place',
   traps: [],
   gameOver: false
 };
 
-// Limits & resolution memory
-gameState.lastFlips = [];           // [{idx, from, to, src:'RPS'|'TRAP'|'CURSE'}]
-gameState.omen = { 1: 0, 2: 1 };      // P2 gets 1 Omen per round
-gameState.rerollsLeft = { 1: 2, 2: 2 }; // 2 rerolls remaining (the initial roll in T1 does not count)
-gameState.rerollUsedThisTurn = false; // max 1 per turn (T2/T3)
-gameState.turnSerial = 0; // +1 at each turn validation (P1 then P2, etc.)
+gameState.lastFlips = [];
+gameState.omen = { 1: 0, 2: 1 };
+gameState.rerollsLeft = { 1: 2, 2: 2 };
+gameState.rerollUsedThisTurn = false;
+gameState.turnSerial = 0;
 gameState.firstMoveDone = {1:false, 2:false};
 
 function armCurse(targetCell, byPlayer){
   const t = gameState.board[targetCell];
   if (!t) return;
-  // arm the curse: triggers at the end of the next turn of the targeted player
   t.cursed = { by: byPlayer, triggerOn: gameState.turnSerial + 1 };
 }
 
-// UI State
 let messages = [];
 
 // Initialize the UI
@@ -156,7 +147,7 @@ function initializeUI() {
 }
 
 function canUseOmenNow(){
-  const who = gameState.currentPlayer; // player who starts the turn
+  const who = gameState.currentPlayer;
   return gameState.omen[who] && gameState.lastFlips && gameState.lastFlips.length>0;
 }
 
@@ -166,20 +157,18 @@ function applyOmenOn(idx){
   const found = gameState.lastFlips.find(f => f.idx===idx);
   //TODO : Make an event on UI to alert the player
   if (!found) { return false; }
-  // restore owner
   const T = gameState.board[idx];
   T.player = found.from;
-  gameState.omen[who] = 0; // consumed
+  gameState.omen[who] = 0;
   return true;
 }
 
 function createBoard() {
-  initIsoCanvas(); // initialize the iso canvas
+  initIsoCanvas();
 }
 
 
 function createWheels() {
-  // Player 1 wheels
   const p1Wheels = document.getElementById('player1Wheels');
   p1Wheels.innerHTML = '';
   for (let i = 0; i < 5; i++) {
@@ -203,8 +192,6 @@ function updateGameInfo() {
   document.getElementById('currentRound').textContent = gameState.currentRound;
   document.getElementById('currentTurn').textContent = gameState.currentTurn;
   document.getElementById('currentPlayer').textContent = gameState.currentPlayer;
-
-  // Display round wins instead of cumulative tile points
   document.getElementById('p1Score').textContent = gameState.roundWins[1];
   document.getElementById('p2Score').textContent = gameState.roundWins[2];
 
@@ -215,10 +202,8 @@ function updateGameInfo() {
   if (ph) ph.textContent = `Phase: ${gameState.phase}`;}
 
 function drawBoardIso(){
-  // Clear canvas (stay in CSS coordinates due to setTransform set in fitIsoDPI)
   ictx.clearRect(0,0,iso.width/DPR, iso.height/DPR);
 
-  // 1) checkerboard background (2 tones)
   for (let i=0;i<9;i++){
       const {x:cx, y:cy} = POS[i];
       const x=i%3, y=(i/3)|0;
@@ -227,7 +212,6 @@ function drawBoardIso(){
        ictx.fill();
   }
 
-  // 2) adjacency highlights for possible second placement
   if (gameState.placementState.adjacentHighlighted?.length){
     for (const i of gameState.placementState.adjacentHighlighted){
       const {x:cx, y:cy} = POS[i];
@@ -240,32 +224,26 @@ function drawBoardIso(){
     }
   }
 
-  // 3) placed tiles (temporary emoji) + owned outline + shields
   for (let i=0;i<9;i++){
     const t = gameState.board[i]; if (!t) continue;
     const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
 
-    // icon
     ictx.font = '16px system-ui, sans-serif';
     ictx.textAlign = 'center';
     ictx.textBaseline = 'middle';
     ictx.fillStyle = '#e6e6e6';
-    ictx.fillText(ICON[t.type], cx, cy-2);
-
-    // shield (small square at top-right)
+    ictx.fillText(ICON[t.t], cx, cy-2);
     if (t.shields>0){
       ictx.fillStyle = '#3BA7A9';
       ictx.fillRect(cx + (TILE_W/2 - 10), cy - (TILE_H/2) + 4, 6, 6);
     }
 
-    // ownership outline
     diamondPath(ictx, cx, cy);
     ictx.lineWidth = 2;
-    ictx.strokeStyle = OWN_COL[t.player];
+    ictx.strokeStyle = OWN_COL[t.p];
     ictx.stroke();
   }
 
-  // 4) traps (on empty cells)
   for (let i=0;i<9;i++){
     const trap = trapByCell[i];
     if (!trap) continue;
@@ -275,7 +253,7 @@ function drawBoardIso(){
     const {x:cx, y:cy} = POS[i];
     ictx.beginPath();
     ictx.arc(cx, cy, 6, 0, Math.PI*2);
-    ictx.fillStyle = '#E2C044'; // lantern amber
+    ictx.fillStyle = '#E2C044';
     ictx.globalAlpha = 0.85;
     ictx.fill();
     ictx.globalAlpha = 1;
@@ -284,7 +262,6 @@ function drawBoardIso(){
     ictx.stroke();
   }
 
-  // 5) flash on this turn's flips (lastFlips)
   if (gameState.lastFlips?.length){
     for (const f of gameState.lastFlips){
       const i=f.idx; const {x:cx, y:cy} = POS[i];
@@ -297,7 +274,6 @@ function drawBoardIso(){
     }
   }
 
-  // 6) hover feedback (only if placement possible)
   if (hoverCell >= 0) {
     const {x:cx, y:cy} = POS[hoverCell];
     diamondPath(ictx, cx, cy);
@@ -309,12 +285,10 @@ function drawBoardIso(){
   }
 }
 
-// wrapper
 function updateBoard() { invalidate(); }
 
 function handleIsoPointer(ev){
   const rect = iso.getBoundingClientRect();
-  // coordinates in CSS pixels (not physical pixels)
   const px = ev.clientX - rect.left;
   const py = ev.clientY - rect.top;
 
@@ -332,7 +306,6 @@ function handleIsoPointer(ev){
 }
 
 function handleIsoHover(ev){
-  // Update hover cell and cursor style (no DOM spam)
   const rect = iso.getBoundingClientRect();
   const px = ev.clientX - rect.left;
   const py = ev.clientY - rect.top;
@@ -341,7 +314,6 @@ function handleIsoHover(ev){
     const p = POS[i]; if (!p) continue;
     if (pointInDiamond(px, py, p.x, p.y)) { found = i; break; }
   }
-  // Only show pointer when the cell is a valid candidate right now
   const canPlace = (found>=0) && isCellEmpty(found) &&
                    (gameState.currentPlayer===1) &&
                    (gameState.phase==='place') &&
@@ -354,7 +326,6 @@ function handleIsoHover(ev){
 }
 
 function updateWheels() {
-  // Player 1 wheels
   for (let i = 0; i < 5; i++) {
     const wheelEl = document.getElementById(`p1-wheel-${i}`);
     const wheel = gameState.players[0].wheels[i];
@@ -402,7 +373,6 @@ function updateSpecialEffects() {
   const promptEl = document.getElementById('effectPrompt');
   const effectsEl = document.getElementById('specialEffects');
 
-  // Clear previous content
   effectsEl.innerHTML = '<div class="effect-prompt" id="effectPrompt"></div>';
   const newPromptEl = document.getElementById('effectPrompt');
 
@@ -482,7 +452,6 @@ function updateSpecialEffects() {
   }
 }
 
-// Event handlers
 function wheelPendingUsed(i){
   return gameState.placementState.pendingPlacements.some(p => p.wheelIndex === i);
 }
@@ -494,30 +463,20 @@ function wheelClick(player, wheelIndex) {
   if (isUsed) return;
 
   gameState.placementState.selectedWheel = wheelIndex;
-  // Refresh adjacency guidance if one tile already staged
   updateAdjacentHighlights();
   updateUI();
 }
 
 function cellClick(cellIndex) {
-  // Only allow human placement during "place" phase
   if (gameState.currentPlayer !== 1 || gameState.phase !== 'place') return;
-
-  // A wheel must be selected before placing
   if (gameState.placementState.selectedWheel === null) return;
-
-  // Cell must be empty (and not already staged in pendingPlacements)
   if (!isCellEmpty(cellIndex)) return;
-
-  // Enforce adjacency for the second placement in T1/T2
   if (gameState.placementState.pendingPlacements.length === 1) {
     const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
     if (maxTiles === 2) {
       if (!gameState.placementState.adjacentHighlighted.includes(cellIndex)) return;
     }
   }
-
-  // Enforce per-turn placement cap (2 in player's first two turns, else 1)
   const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
   if (gameState.placementState.pendingPlacements.length >= maxTiles) return;
 
@@ -535,26 +494,17 @@ function placeTile(cellIndex) {
 
   if (tileType === T.ECLIPSE && gameState.players[0].eclipseUsed) tileType = T.ATK;
 
-  const tile = {
-    player: 1,
-    type: tileType,
-    originalType: tileType,
-    wheelIndex,
-    shields: 0,
-    cursed: false,
-    trapToken: null
-  };
+  const tile = { p:1, t:tileType, sh:0, cu:null };
 
   gameState.placementState.pendingPlacements.push({ wheelIndex, cellIndex, tileType });
   gameState.board[cellIndex] = tile;
   gameState.placementState.selectedWheel = null;
 
-  const trappedByOpp = gameState.traps.some(t => t.cell === cellIndex && t.player !== tile.player);
+  const trappedByOpp = gameState.traps.some(tr => tr.cell === cellIndex && tr.player !== tile.p);
   gameState.placementState
     .pendingPlacements[gameState.placementState.pendingPlacements.length - 1]
     .trapped = trappedByOpp;
 
-  // Placement effects ONLY if not trapped
   if (!trappedByOpp) {
     if (tileType === T.WARD) startWardEffect(cellIndex);
     else if (tileType === T.HEX) startHexEffect(cellIndex);
@@ -565,24 +515,16 @@ function placeTile(cellIndex) {
 }
 
 function startWardEffect(cellIndex) {
-  const adjacentAllies = [];
-  const adjacentCells = getAdjacentCells(cellIndex);
-
-  adjacentCells.forEach(adjCell => {
-    const tile = gameState.board[adjCell];
-    if (tile && tile.player === 1) {
-      adjacentAllies.push(adjCell);
-    }
+  const adjacentAllies = ADJ[cellIndex].filter(c => {
+    const ti = gameState.board[c];
+    return ti && ti.p === 1;
   });
 
   if (adjacentAllies.length === 0) {
-    // No allies, just shield self
     const self = gameState.board[cellIndex];
-    self.shields = 1;
-    // cleanse if cursed
-    if (self.cursed) { self.cursed = null; }
+    self.sh = 1;
+    if (self.cu) self.cu = null;
   } else {
-    // Multiple targets, need choice
     gameState.placementState.awaitingWardTarget = {
       tileCell: cellIndex,
       availableTargets: adjacentAllies
@@ -593,15 +535,10 @@ function startWardEffect(cellIndex) {
 function startHexEffect(cellIndex) {
   const curseTargets = [];
   const trapTargets = [];
-  const adjacentCells = getAdjacentCells(cellIndex);
-
-  adjacentCells.forEach(adjCell => {
-    const tile = gameState.board[adjCell];
-    if (tile && tile.player !== 1) {
-      curseTargets.push(adjCell);
-    } else if (!tile) {
-      trapTargets.push(adjCell);
-    }
+  ADJ[cellIndex].forEach(c => {
+    const t = gameState.board[c];
+    if (t && t.p !== 1) curseTargets.push(c);
+    else if (!t) trapTargets.push(c);
   });
 
   gameState.placementState.awaitingHexChoice = {
@@ -621,11 +558,8 @@ function startEclipseEffect(cellIndex) {
 function handleWardTarget(wardCell, targetCell) {
   const ward = gameState.board[wardCell];
   const ally = gameState.board[targetCell];
-  ward.shields = 1;
-  if (ward.cursed) { ward.cursed = null; }
-  ally.shields = 1;
-  // cleanse if cursed
-  if (ally.cursed) { ally.cursed = null; }
+  ward.sh = 1; if (ward.cu) ward.cu = null;
+  ally.sh = 1; if (ally.cu) ally.cu = null;  
   gameState.placementState.awaitingWardTarget = null;
 
   updateUI();
@@ -639,7 +573,6 @@ function handleHexChoice(hexCell, targetCell, mode) {
       armCurse(targetCell, 1);
     }
   } else if (mode === 'trap') {
-    // Remove old traps for this player
     gameState.traps = gameState.traps.filter(t => t.player !== 1);
     gameState.traps.push({ cell: targetCell, player: 1 });
     rebuildTrapIndex();
@@ -650,76 +583,62 @@ function handleHexChoice(hexCell, targetCell, mode) {
 }
 
 function handleEclipseChoice(eclipseCell, chosenType) {
-  gameState.board[eclipseCell].type = chosenType;
+  gameState.board[eclipseCell].t = chosenType;
   gameState.placementState.awaitingEclipseChoice = null;
 
-  // Trigger cascading effects
-  if (chosenType === 'WARD') {
+  if (chosenType === T.WARD) {
     startWardEffect(eclipseCell);
-  } else if (chosenType === 'HEX') {
+  } else if (chosenType === T.HEX) {
     startHexEffect(eclipseCell);
   }
 
   updateUI();
 }
 
-// Action handlers
 function rollFaces(playerIndex, onlyUnused = true) {
   const P = gameState.players[playerIndex];
-  const allowEclipse = !P.eclipseUsed;  // only one ECLIPSE per player per round
+  const allowEclipse = !P.eclipseUsed;
   let eclipseRolled = false;
   for (let i = 0; i < 5; i++) {
     if (onlyUnused && P.usedWheels.includes(i)) continue;
-    // small pool without strings
+    
     const pool = allowEclipse && !eclipseRolled ? [T.ATK,T.HEX,T.WARD,T.ECLIPSE] : [T.ATK,T.HEX,T.WARD];
     const face = pool[(Math.random()*pool.length)|0];
-    if (face===T.ECLIPSE){
-      P.wheels[i] = T.ECLIPSE; eclipseRolled = true;
-    } else {
-      P.wheels[i] = face;
-    }
+    if (face===T.ECLIPSE){ P.wheels[i]=T.ECLIPSE; eclipseRolled=true; } else P.wheels[i]=face;
   }
 }
 
 function rerollAction() {
   const me = gameState.currentPlayer;
 
-  // Only human, only during placement phase
   if (me !== 1) return;
   if (gameState.phase !== 'place') return;
 
-  // Disallow reroll after placing any tile(s) this turn
   if (gameState.placementState.pendingPlacements.length > 0) return;
 
-  // Disallow reroll on the player's first move of the round
   if (!gameState.firstMoveDone?.[me]) return;
 
-  // Max one reroll per turn, and only if any left
   if (gameState.rerollUsedThisTurn) return;
   if (gameState.rerollsLeft[me] <= 0) return;
 
-  // Reroll only unused wheels for the human player
   rollFaces(0, true);
   gameState.rerollsLeft[me]--;
   gameState.rerollUsedThisTurn = true;
-  // Phase stays "place"
   updateUI();
 }
 
 function validateAction() {
   if (gameState.placementState.pendingPlacements.length === 0) return;
 
-  // No unresolved special effects
   if (gameState.placementState.awaitingWardTarget || 
       gameState.placementState.awaitingHexChoice || 
       gameState.placementState.awaitingEclipseChoice) {
     return;
   }
 
-  const me = 1, opp = 2; // human vs AI (for now)
+  const me = 1, opp = 2;
   const placements = gameState.placementState.pendingPlacements.slice();
 
-  // 1) mark used wheels (and ECLIPSE used)
   placements.forEach(p => {
     if (!gameState.players[0].usedWheels.includes(p.wheelIndex)){
       gameState.players[0].usedWheels.push(p.wheelIndex);
@@ -729,46 +648,33 @@ function validateAction() {
     }
   });
 
-  // 2) TAG TRAP & cancel effect on placement if trapped
-  // (already skipped prompts if trapped at placeTile)
-
-  // 3) TRAP TRIGGER (immediate flip attempted on tiles placed on trapped cell)
   const flips = [];
   for (const p of placements) {
     if (p.trapped) {
-      // consume opponent trap and attempt flip
       const trapIdx = gameState.traps.findIndex(t => t.cell===p.cellIndex && t.player===opp);
       if (trapIdx>=0) {
-        const T = gameState.board[p.cellIndex];
-        if (T.shields>0) { T.shields=0; }
-        else { flips.push({idx:p.cellIndex, from:T.player, to:opp, src:'TRAP'}); T.player = opp; }
-        gameState.traps.splice(trapIdx,1); // trap consumed
+        const ti = gameState.board[p.cellIndex];
+        if (ti.sh>0) { ti.sh=0; }
+        else { flips.push({idx:p.cellIndex, from:ti.p, to:opp, src:'TRAP'}); ti.p = opp; }
+        gameState.traps.splice(trapIdx,1);
         rebuildTrapIndex();
       }
     }
   }
 
-  // 4) SIMULTANEOUS RPS
-  flips.push(...resolveCombatSimultaneous(me));
+  flips.push(...resolveCombatSimultaneousOn(gameState.board, me));
 
-  // 5) Store for defender's Omen
   gameState.lastFlips = flips.slice();
 
-  // 6) Reset placement state
   gameState.placementState.pendingPlacements = [];
   gameState.placementState.adjacentHighlighted = [];
-  gameState.rerollUsedThisTurn = false; // new turn, reroll possible (if T2/T3)
+  gameState.rerollUsedThisTurn = false;
   gameState.turnSerial++;              
-  resolveCursesForPlayer(1);           // if P1 was cursed and did not protect
-  // mark P1 first move as completed (even if it was technically turn 2 when AI started)
+  resolveCursesForPlayer(1);
   if (gameState.firstMoveDone[1] === false) gameState.firstMoveDone[1] = true;
   gameState.turnsTaken[1] = (gameState.turnsTaken[1] || 0) + 1;
-
-
-  // 7) Switch to AI turn (defender's turn start = Omen possible)
   gameState.currentPlayer = 2;
 
-  // AI Omen (optional). For now, not used automatically.
   updateUI();
 
   setTimeout(simulateAITurn, 800);
@@ -779,8 +685,6 @@ function cancelAction() {
 
   const lastPlacement = gameState.placementState.pendingPlacements.pop();
   gameState.board[lastPlacement.cellIndex] = null;
-
-  // Reset special effects
   gameState.placementState.awaitingWardTarget = null;
   gameState.placementState.awaitingHexChoice = null;
   gameState.placementState.awaitingEclipseChoice = null;
@@ -804,15 +708,9 @@ function resetAction() {
   updateUI();
 }
 
-// Utility functions
 function isCellEmpty(cellIndex) {
   if (gameState.board[cellIndex] !== null) return false;
   return !gameState.placementState.pendingPlacements.some(p => p.cellIndex === cellIndex);
-}
-
-function getAdjacentCells(cellIndex) {
-  // Use precomputed adjacency (hot path)
-  return ADJ[cellIndex];
 }
 
 function computeAdjacency(cellIndex){
@@ -826,16 +724,6 @@ function computeAdjacency(cellIndex){
   return out;
 }
 
-function areAdjacent(cellA, cellB) {
-  const rowA = Math.floor(cellA / 3);
-  const colA = cellA % 3;
-  const rowB = Math.floor(cellB / 3);
-  const colB = cellB % 3;
-
-  return (Math.abs(rowA - rowB) === 1 && colA === colB) ||
-    (Math.abs(colA - colB) === 1 && rowA === rowB);
-}
-
 function updateAdjacentHighlights() {
   gameState.placementState.adjacentHighlighted = [];
 
@@ -843,7 +731,7 @@ function updateAdjacentHighlights() {
     const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
     if (maxTiles === 2) {
       const firstPlacement = gameState.placementState.pendingPlacements[0];
-      const adjacentCells = getAdjacentCells(firstPlacement.cellIndex);
+      const adjacentCells = ADJ[firstPlacement.cellIndex];
       gameState.placementState.adjacentHighlighted = adjacentCells.filter(cell => isCellEmpty(cell));
     }
   }
@@ -853,50 +741,52 @@ function doesTileBeat(typeA, typeB) {
   return BEATS[typeA] === typeB;
 }
 
-function resolveCombatSimultaneous(activePlayer){
-  // reuse accumulator to avoid GC; manual zeroing
-  const atk = SCR.atk;
+function resolveCombatSimultaneousOn(board, activePlayer, cow){
+  const atk = Array.from({length:9},()=>({p1:0,p2:0}));
   for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
 
-  // 1) collect all attempts (simultaneous)
   for (let i=0;i<9;i++){
-    const A = gameState.board[i]; if (!A) continue;
+    const A = board[i]; if (!A) continue;
     const neigh = ADJ[i];
     for (const j of neigh){
-      const T = gameState.board[j]; if (!T || T.player===A.player) continue;
-      if (doesTileBeat(A.type, T.type)){ // A.aff beats T.aff (here aff=type)
-        (A.player===1?atk[j].p1++:atk[j].p2++);
+      const Tt = board[j]; if (!Tt || Tt.p===A.p) continue;
+      if (doesTileBeat(A.t, Tt.t)){
+        (A.p===1?atk[j].p1++:atk[j].p2++);
       }
     }
   }
 
-  // 2) apply simultaneously (shield -> arbitration -> flip)
   const flips = [];
   for (let j=0;j<9;j++){
-    const T = gameState.board[j]; if (!T) continue;
+    const Tt = board[j]; if (!Tt) continue;
     let {p1,p2} = atk[j];
     if (!p1 && !p2) continue;
 
-    // shield: blocks 1 attempt (regardless of side)
-    if (T.shields>0){
+    if (Tt.sh>0){
       if      (p1>p2) p1--;
       else if (p2>p1) p2--;
       else if (activePlayer===1 && p2>0) p2--;
       else if (activePlayer===2 && p1>0) p1--;
-      T.shields = 0;
+      if (cow && cow(j)) {}
+      board[j] = {...board[j], sh:0};
     }
 
-    if (p1>p2 && T.player!==1){ flips.push({idx:j,from:T.player,to:1,src:'RPS'}); T.player=1; }
-    else if (p2>p1 && T.player!==2){ flips.push({idx:j,from:T.player,to:2,src:'RPS'}); T.player=2; }
+    if (p1>p2 && Tt.p!==1){
+      flips.push({idx:j,from:Tt.p,to:1,src:'RPS'});
+      if (cow && cow(j)) {}
+      board[j] = {...board[j], p:1};
+    } else if (p2>p1 && Tt.p!==2){
+      flips.push({idx:j,from:Tt.p,to:2,src:'RPS'});
+      if (cow && cow(j)) {}
+      board[j] = {...board[j], p:2};
+    }
   }
   return flips;
 }
 
-// Pure variant used by AI sims (operates on provided board)
 function resolveCombatOn(board, activePlayer){
   const atk = SCR.atk;
   for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
-  // collect
   for (let i=0;i<9;i++){
     const A = board[i]; if (!A) continue;
     const neigh = ADJ[i];
@@ -907,7 +797,6 @@ function resolveCombatOn(board, activePlayer){
       }
     }
   }
-  // apply
   for (let j=0;j<9;j++){
     const T = board[j]; if (!T) continue;
     let {p1,p2} = atk[j];
@@ -927,48 +816,51 @@ function resolveCombatOn(board, activePlayer){
 function resolveCursesForPlayer(endedPlayerId){
   const flips = [];
   for (let i=0;i<9;i++){
-    const t = gameState.board[i]; if (!t || !t.cursed) continue;
-    const curse = t.cursed;
-    // triggers only if the cell belongs to the player who just finished THEIR turn
-    if (t.player === endedPlayerId && gameState.turnSerial >= curse.triggerOn) {
-      if (t.shields > 0) {
-        t.cursed = null;
+    const t = gameState.board[i]; if (!t || !t.cu) continue;
+    const curse = t.cu;
+    if (t.p === endedPlayerId && gameState.turnSerial >= curse.triggerOn) {
+      if (t.sh > 0) {
+        t.cu = null;
       } else {
-        // flip for the curse's author
-        const to = curse.by, from = t.player;
+        const to = curse.by, from = t.p;
         if (from !== to) {
-          t.player = to;
+          t.p = to;
           flips.push({ idx:i, from, to, src:'CURSE' });
         }
-        t.cursed = null;
+        t.cu = null;
       }
     }
   }
-  if (flips.length) gameState.lastFlips = flips; // visible for Omen at the start of the next turn
+  if (flips.length) gameState.lastFlips = flips;
 }
 
-function cloneBoard(src){
-  return src.map(t => t ? {...t} : null);
+function makeCOW(baseBoard, workBoard, journal){
+  return function cow(idx){
+    if (workBoard[idx] === baseBoard[idx]) {
+      journal.push([idx, baseBoard[idx]]);
+      workBoard[idx] = workBoard[idx] ? {...workBoard[idx]} : null;
+      return true;
+    }
+    return false;
+  };
 }
 
-// Fast scoring heuristic (position + local control)
 function scoreBoardFor(player, board){
   const center = 4, corners = [0,2,6,8];
   let s = 0;
   for (let i=0;i<9;i++){
     const t = board[i]; if (!t) continue;
-    const mult = (t.player===player? 1 : -1);
-    s += mult; // 1 point per controlled cell
+    const mult = (t.p===player? 1 : -1);
+    s += mult;
     if (i===center) s += 2*mult;
     else if (corners.includes(i)) s += 1*mult;
-    // potential: number of adjacent enemies beatable – threats suffered
-    const neigh = getAdjacentCells(i);
+    const neigh = ADJ[i];
     let beat=0, threat=0;
     for (const j of neigh){
       const o = board[j]; if (!o) continue;
-      if (o.player!==t.player){
-        if (doesTileBeat(t.type, o.type)) beat++;
-        if (doesTileBeat(o.type, t.type)) threat++;
+      if (o.p!==t.p){
+        if (doesTileBeat(t.t, o.t)) beat++;
+        if (doesTileBeat(o.t, t.t)) threat++;
       }
     }
     s += 0.4*mult*beat - 0.3*mult*threat;
@@ -976,75 +868,65 @@ function scoreBoardFor(player, board){
   return s;
 }
 
-// Applies a "virtual" placement and simulates the resolution (TRAP -> RPS)
 function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps, opts={}){
-  const opp = (player===1?2:1);
-  const B = cloneBoard(board);
-  const NT = { player, type: wheelType, originalType: wheelType, shields:0, cursed:false, trapToken:null };  
-  const trapped = traps.some(t => t.cell===cellIndex && t.player===opp);
-
-  // Placement
+  const B = board.slice();
+  const journal = [];
+  const cow = makeCOW(board, B, journal);
+  const NT = { p:player, t:wheelType, sh:0, cu:null };
+  const trapped = traps.some(tr => tr.cell===cellIndex && tr.player===opp);
+  journal.push([cellIndex, B[cellIndex]]);
   B[cellIndex] = NT;
 
-  // Placement effects if not trapped
   if (!trapped){
     if (wheelType===T.WARD){
-      // self-shield + shield best adjacent ally if present
-      NT.shields = 1;
-      const allies = ADJ[cellIndex].filter(c => B[c] && B[c].player===player);
+      NT.sh = 1;
+      const allies = ADJ[cellIndex].filter(c => B[c] && B[c].p===player);
       if (allies.length){
-        // choose the most "contested" ally
         let best = allies[0], bestScore = -1;
         for (const a of allies){
           const neigh = ADJ[a];
           let menaces = 0;
-          for (const j of neigh){ const o = B[j]; if (o && o.player!==player && doesTileBeat(o.type, B[a].type)) menaces++; }
+          for (const j of neigh){ const o = B[j]; if (o && o.p!==player && doesTileBeat(o.t, B[a].t)) menaces++; }
           const cur = menaces;
           if (cur>bestScore){ bestScore=cur; best=a; }
         }
-        B[best].shields = (B[best].shields||0)+1;
+        cow(best);
+        B[best] = {...B[best], sh:(B[best].sh||0)+1, cu:null};
       }
     } else if (wheelType===T.HEX){
-      const curseTargets = ADJ[cellIndex].filter(c => B[c] && B[c].player===opp);
+      const curseTargets = ADJ[cellIndex].filter(c => B[c] && B[c].p===opp);
       const trapTargets  = ADJ[cellIndex].filter(c => !B[c]);
-      // simple policy: if we can curse the center or flip quickly, curse, otherwise trap near the center
       let did=false;
       if (curseTargets.length){
-        // just mark a flag (not used yet), indirect impact via heuristic
         const pick = curseTargets.includes(4) ? 4 : curseTargets[0];
-        if (typeof pick==='number' && B[pick]) { B[pick] = {...B[pick], cursed:1}; did=true; }
+        if (typeof pick==='number' && B[pick]) { cow(pick); B[pick] = {...B[pick], cu:{by:player, triggerOn:Infinity}}; did=true; }
       }
       if (!did && trapTargets.length){
         // no immediate effect in the sim, but "reserve" mentally: nothing to change on B
       }
-    } else if (wheelType==='ECLIPSE'){
+    } else if (wheelType===T.ECLIPSE){
       // test the 3 affinities at the evaluation stage (see simulateAITurn)
     }
   } else {
-    // trapped: effects cancelled, trap flip before RPS
-    if (NT.shields>0) NT.shields=0;
-    else NT.player = opp;
+    if (NT.sh>0) NT.sh=0;
+    else NT.p = opp;
   }
 
-  // Simultaneous RPS (pure variant on local board)
-  resolveCombatOn(B, player);
+  resolveCombatSimultaneousOn(B, player, cow);
   return B;
 }
 
-// Evaluates a move (type/cell) for player
 function evaluateMove(player, wheelType, cellIndex, board, traps){
   const B = simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps);
   return scoreBoardFor(player, B);
 }
 
 function simulateAITurn() {
-  // Omen auto: cancels the most "profitable" flip
   if (canUseOmenNow() && gameState.currentPlayer===2){
     let bestIdx = null, bestGain=-1e9;
     for (const f of gameState.lastFlips){
-      const tmp = cloneBoard(gameState.board);
-      // virtually undo
-      if (tmp[f.idx]) tmp[f.idx].player = f.from;
+      const tmp = gameState.board.map(t => t ? {...t} : null);
+      if (tmp[f.idx]) tmp[f.idx].p = f.from;
       const gain = scoreBoardFor(2, tmp) - scoreBoardFor(2, gameState.board);
       if (gain>bestGain){ bestGain=gain; bestIdx=f.idx; }
     }
@@ -1055,25 +937,21 @@ function simulateAITurn() {
   const availableWheels = [];
   for (let i=0;i<5;i++) if (!P.usedWheels.includes(i)) availableWheels.push(i);
 
-  // free cells
   const empties = [];
   for (let i=0;i<9;i++) if (isCellEmpty(i)) empties.push(i);
 
-  // if no possible move → skip
   if (!availableWheels.length || !empties.length){
     gameState.currentPlayer = 1;
     updateUI();
     return;
   }
 
-  // Evaluate the best move (1 tile for now; can be extended to 2 in T1/T2)
   let best = null, bestScore = -1e9, bestEclipseType=null;
 
   for (const w of availableWheels){
     const face = P.wheels[w];
     for (const cell of empties){
       if (face===T.ECLIPSE){
-        // test the 3 affinities and keep the best one
         for (const aff of [T.ATK,T.HEX,T.WARD]){
           const sc = evaluateMove(2, aff, cell, gameState.board, gameState.traps);
           if (sc>bestScore){ bestScore=sc; best={wheelIndex:w, cellIndex:cell, type:T.ECLIPSE}; bestEclipseType=aff; }
@@ -1085,29 +963,17 @@ function simulateAITurn() {
     }
   }
 
-  // Simple reroll policy: if no move is ≥ to the current state + epsilon, and if AI has rerolls left
   const curScore = scoreBoardFor(2, gameState.board);
-  // AI may still reroll once per turn, but never on its first move of the round.
   if (bestScore <= curScore-0.1 && gameState.rerollsLeft[2]>0 && gameState.firstMoveDone[2]===true){    rollFaces(1, true);
     gameState.rerollsLeft[2]--;
     return setTimeout(simulateAITurn, 200);
   }
 
-  // Play the best move found
   const wheelIndex = best.wheelIndex;
   let tileType = best.type;
   const cellIndex = best.cellIndex;
 
-  // place on the real board
-  const tile = {
-    player: 2,
-    type: tileType,
-    originalType: tileType,
-    wheelIndex,
-    shields: 0,
-    cursed: false,
-    trapToken: null
-  };
+  const tile = { p:2, t:tileType, sh:0, cu:null };
 
   gameState.board[cellIndex] = tile;
   gameState.players[1].usedWheels.push(wheelIndex);
@@ -1115,35 +981,29 @@ function simulateAITurn() {
   const trappedByP1 = gameState.traps.some(t => t.cell === cellIndex && t.player === 1);
 
   if (!trappedByP1) {
-    // simple AI effects
     if (tileType === T.WARD) {
-      tile.shields = 1;
-      // bonus: shield an ally if possible
-      const adjAllies = getAdjacentCells(cellIndex).filter(c => gameState.board[c] && gameState.board[c].player===2);
+      tile.sh = 1;
+      const adjAllies = ADJ[cellIndex].filter(c => gameState.board[c] && gameState.board[c].p===2);      
       if (adjAllies.length){
-        // protect the most threatened ally
         let bestA=adjAllies[0], bestMen= -1;
         for (const a of adjAllies){
-          const neigh = getAdjacentCells(a);
+          const neigh = ADJ[a];
           let men=0;
-          for (const j of neigh){ const o=gameState.board[j]; if (o && o.player===1 && doesTileBeat(o.type, gameState.board[a].type)) men++; }
+          for (const j of neigh){ const o=gameState.board[j]; if (o && o.p===1 && doesTileBeat(o.t, gameState.board[a].t)) men++; }
           if (men>bestMen){ bestMen=men; bestA=a; }
         }
-        gameState.board[bestA].shields = (gameState.board[bestA].shields||0)+1;
-        if (gameState.board[bestA].cursed) {
-          gameState.board[bestA].cursed = null;
-        }
+        gameState.board[bestA].sh = (gameState.board[bestA].sh||0)+1;
+        if (gameState.board[bestA].cu) gameState.board[bestA].cu = null
       }
     } else if (tileType === T.HEX) {
-      const adj = getAdjacentCells(cellIndex);
-      const curseTargets = adj.filter(c => gameState.board[c] && gameState.board[c].player===1);
+      const adj = ADJ[cellIndex];
+      const curseTargets = adj.filter(c => gameState.board[c] && gameState.board[c].p===1);
       const trapTargets  = adj.filter(c => !gameState.board[c]);
       if (curseTargets.length){
         const pick = curseTargets.includes(4) ? 4 : curseTargets[0];
         if (typeof pick==='number' && gameState.board[pick]) armCurse(pick, 2);
       } else if (trapTargets.length){
         gameState.traps = gameState.traps.filter(t => t.player !== 2);
-        // place a trap as "central" as possible
         const bestT = trapTargets.sort((a,b)=>{
           const pa = (a===4?2: ([0,2,6,8].includes(a)?1:0));
           const pb = (b===4?2: ([0,2,6,8].includes(b)?1:0));
@@ -1152,38 +1012,34 @@ function simulateAITurn() {
         gameState.traps.push({ cell: bestT, player: 2 });
       }
     } else if (tileType === T.ECLIPSE) {
-      tile.type = bestEclipseType || 'ATK';
-      if (tile.type==='WARD') tile.shields = 1;
+      tile.t = bestEclipseType || 'ATK';
+      if (tile.t===T.WARD) tile.sh = 1;
       gameState.players[1].eclipseUsed = true;
     }
   }
 
-  // P1 trap if placed on it (before RPS)
   const flips = [];
   if (trappedByP1) {
     const idxTrap = gameState.traps.findIndex(t => t.cell === cellIndex && t.player === 1);
     if (idxTrap >= 0) {
-      if (tile.shields > 0) { tile.shields = 0; }
-      else { flips.push({idx:cellIndex, from:tile.player, to:1, src:'TRAP'}); tile.player = 1; }
+      if (tile.sh > 0) { tile.sh = 0; }
+      else { flips.push({idx:cellIndex, from:tile.p, to:1, src:'TRAP'}); tile.p = 1; }
       gameState.traps.splice(idxTrap, 1);
       rebuildTrapIndex();
     }
   }
 
-  const flipsR = resolveCombatSimultaneous(2);
+  const flipsR = resolveCombatSimultaneousOn(gameState.board, 2);
   gameState.lastFlips = flips.concat(flipsR);
   gameState.turnSerial++;
-  resolveCursesForPlayer(2); // if AI was cursed and did not protect
+  resolveCursesForPlayer(2);
   gameState.turnsTaken[2] = (gameState.turnsTaken[2] || 0) + 1;
-  // mark AI first move as completed
   if (gameState.firstMoveDone[2] === false) gameState.firstMoveDone[2] = true;
-  // Next turn
   setTimeout(() => {
     gameState.currentPlayer = 1;
     gameState.currentTurn++;
     if (gameState.currentTurn > 3) endRound();
     else {
-      // go straight to placement (no separate reroll phase)
       gameState.phase = 'place';
     }    updateUI();
   }, 300);
@@ -1191,8 +1047,8 @@ function simulateAITurn() {
 }
 
 function endRound() {
-  const p1Tiles = gameState.board.filter(t => t && t.player === 1).length;
-  const p2Tiles = gameState.board.filter(t => t && t.player === 2).length;
+  const p1Tiles = gameState.board.filter(t => t && t.p === 1).length;
+  const p2Tiles = gameState.board.filter(t => t && t.p === 2).length;
 
   let who = 'TIE';
   if (p1Tiles > p2Tiles) {
@@ -1204,23 +1060,19 @@ function endRound() {
   } 
   gameState.roundResults.push(who);
 
-  // early end if someone reaches 2 wins
   if (gameState.roundWins[1] === 2 || gameState.roundWins[2] === 2) {
     return endGame();
   }
 
-  // Maximum 3 rounds
   if (gameState.currentRound >= 3) {
     return endGame();
   }
 
-  // next round
   gameState.currentRound++;
   seedRound();
 }
 
 function seedRound() {
-  // reset board & round state
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
   gameState.lastFlips = [];
@@ -1229,20 +1081,14 @@ function seedRound() {
   gameState.rerollUsedThisTurn = false;
   gameState.firstMoveDone = {1:false, 2:false};
   gameState.turnsTaken = { 1: 0, 2: 0 };
-
-  // random wheels for both players (and reset flags)
   gameState.players.forEach(p => { p.usedWheels = []; p.rerollsUsed = 0; p.eclipseUsed = false; });
   rollFaces(0, false);
   rollFaces(1, false);
 
-  // random draw for the first player
   const startPlayer = Math.random() < 0.5 ? 1 : 2;
+
   gameState.currentPlayer = startPlayer;
-
-  // Omen: 1 for the defender (the one who does NOT start)
   gameState.omen = startPlayer === 1 ? {1:0, 2:1} : {1:1, 2:0};
-
-  // phase
   gameState.phase = 'place';
 
   updateUI();
@@ -1256,13 +1102,11 @@ function endGame() {
   updateUI();
 }
 
-// Keep a fast cell->trap index in sync with gameState.traps
 function rebuildTrapIndex(){
   trapByCell = Object.create(null);
   for (const t of gameState.traps) trapByCell[t.cell] = t;
 }
 
-// Initialize the game when page loads
 window.onload = function () {
   initializeUI();
 };
