@@ -1,12 +1,8 @@
-// NIGHT DEALER
-const TILE_TYPES = {
-  ATK: 'ATK', HEX: 'HEX', WARD: 'WARD', ECLIPSE: 'ECLIPSE'
-};
-
-const TILE_ICONS = {
-  ATK: '⚔️', HEX: '👁️', WARD: '🛡️', ECLIPSE: '🌙'
-};
-
+// NIGHT DEALER (compact enums)
+const T = { ATK:0, HEX:1, WARD:2, ECLIPSE:3 };           // 0..3
+const ICON = ['⚔️','👁️','🛡️','🌙'];                     // index by T.*
+const BEATS = [T.HEX, T.WARD, T.ATK];                     // who each base type beats (ECLIPSE handled via affinity)
+ 
 // ==== Palette & ownership ====
 const OWN_COL = {1:'#4da3ff', 2:'#ff4d4d'};   // blue P1 / red P2
 const ISO_COL = {dark:'#5f5f5fff', dark2:'#181818', hl:'#ffffff'};
@@ -98,21 +94,20 @@ let gameState = {
   currentPlayer: 1,
   currentRound: 1,
   currentTurn: 1,
-  scores: [0, 0],
   roundWins: {1: 0, 2: 0},
   roundResults: [], 
   board: Array(9).fill(null),
   turnsTaken: {1: 0, 2: 0},
   players: [
     {
-      wheels: ['ATK', 'HEX', 'WARD', 'ATK', 'HEX'],
+      wheels: [T.ATK, T.HEX, T.WARD, T.ATK, T.HEX],
       usedWheels: [],
       rerollsUsed: 0,
       eclipseUsed: false,
       isHuman: true
     },
     {
-      wheels: ['WARD', 'ATK', 'HEX', 'WARD', 'ATK'],
+      wheels: [T.ATK, T.HEX, T.WARD, T.ATK, T.HEX],
       usedWheels: [],
       rerollsUsed: 0,
       eclipseUsed: false,
@@ -255,7 +250,7 @@ function drawBoardIso(){
     ictx.textAlign = 'center';
     ictx.textBaseline = 'middle';
     ictx.fillStyle = '#e6e6e6';
-    ictx.fillText(TILE_ICONS[t.type], cx, cy-2);
+    ictx.fillText(ICON[t.type], cx, cy-2);
 
     // shield (small square at top-right)
     if (t.shields>0){
@@ -365,8 +360,7 @@ function updateWheels() {
     const wheel = gameState.players[0].wheels[i];
     const isUsed = gameState.players[0].usedWheels.includes(i) || wheelPendingUsed(i);
     const isSelected = gameState.placementState.selectedWheel === i;
-
-    wheelEl.textContent = TILE_ICONS[wheel] || '?';
+    wheelEl.textContent = ICON[wheel] || '?';
     wheelEl.className = 'wheel';
 
     if (isUsed) {
@@ -436,7 +430,7 @@ function updateSpecialEffects() {
     const optionsEl = document.createElement('div');
     optionsEl.className = 'effect-options';
 
-    if (hexState.curseTargets.length > 0) {
+    if (hexState.curseTargets.length) {
       hexState.curseTargets.forEach(cellIndex => {
         const btn = document.createElement('button');
         btn.className = 'effect-btn';
@@ -446,7 +440,7 @@ function updateSpecialEffects() {
       });
     }
 
-    if (hexState.trapTargets.length > 0) {
+    if (hexState.trapTargets.length) {
       hexState.trapTargets.forEach(cellIndex => {
         const btn = document.createElement('button');
         btn.className = 'effect-btn';
@@ -465,10 +459,10 @@ function updateSpecialEffects() {
     const optionsEl = document.createElement('div');
     optionsEl.className = 'effect-options';
 
-    ['ATK', 'HEX', 'WARD'].forEach(type => {
+    [T.ATK, T.HEX, T.WARD].forEach(type => {
       const btn = document.createElement('button');
       btn.className = 'effect-btn';
-      btn.textContent = `${TILE_ICONS[type]} ${type}`;
+      btn.textContent = `${ICON[type]} ${['ATK','HEX','WARD'][type]}`;
       btn.onclick = () => handleEclipseChoice(eclipseState.tileCell, type);
       optionsEl.appendChild(btn);
     });
@@ -539,10 +533,7 @@ function placeTile(cellIndex) {
   const wheelIndex = gameState.placementState.selectedWheel;
   let tileType = gameState.players[0].wheels[wheelIndex];
 
-  // Only one ECLIPSE per round: any other ECLIPSE becomes ATK
-  if (tileType === 'ECLIPSE' && gameState.players[0].eclipseUsed) {
-    tileType = 'ATK';
-  }
+  if (tileType === T.ECLIPSE && gameState.players[0].eclipseUsed) tileType = T.ATK;
 
   const tile = {
     player: 1,
@@ -565,10 +556,10 @@ function placeTile(cellIndex) {
 
   // Placement effects ONLY if not trapped
   if (!trappedByOpp) {
-    if (tileType === 'WARD')      startWardEffect(cellIndex);
-    else if (tileType === 'HEX')  startHexEffect(cellIndex);
-    else if (tileType === 'ECLIPSE') startEclipseEffect(cellIndex);
-  } 
+    if (tileType === T.WARD) startWardEffect(cellIndex);
+    else if (tileType === T.HEX) startHexEffect(cellIndex);
+    else if (tileType === T.ECLIPSE) startEclipseEffect(cellIndex);
+  }
   updateAdjacentHighlights();
   updateUI();
 }
@@ -675,15 +666,18 @@ function handleEclipseChoice(eclipseCell, chosenType) {
 // Action handlers
 function rollFaces(playerIndex, onlyUnused = true) {
   const P = gameState.players[playerIndex];
-  // ensures at most 1 ECLIPSE per player for the round
-  const allowEclipse = !P.eclipseUsed;
+  const allowEclipse = !P.eclipseUsed;  // only one ECLIPSE per player per round
   let eclipseRolled = false;
   for (let i = 0; i < 5; i++) {
     if (onlyUnused && P.usedWheels.includes(i)) continue;
-    const pool = ['ATK', 'HEX', 'WARD'];
-    if (allowEclipse && !eclipseRolled) pool.push('ECLIPSE');
-    const face = pool[Math.floor(Math.random() * pool.length)];
-    P.wheels[i] = (face === 'ECLIPSE' ? (eclipseRolled ? 'ATK' : (eclipseRolled = true, 'ECLIPSE')) : face);
+    // small pool without strings
+    const pool = allowEclipse && !eclipseRolled ? [T.ATK,T.HEX,T.WARD,T.ECLIPSE] : [T.ATK,T.HEX,T.WARD];
+    const face = pool[(Math.random()*pool.length)|0];
+    if (face===T.ECLIPSE){
+      P.wheels[i] = T.ECLIPSE; eclipseRolled = true;
+    } else {
+      P.wheels[i] = face;
+    }
   }
 }
 
@@ -730,7 +724,7 @@ function validateAction() {
     if (!gameState.players[0].usedWheels.includes(p.wheelIndex)){
       gameState.players[0].usedWheels.push(p.wheelIndex);
     }
-    if (gameState.players[0].wheels[p.wheelIndex] === 'ECLIPSE') {
+    if (gameState.players[0].wheels[p.wheelIndex] === T.ECLIPSE) {
       gameState.players[0].eclipseUsed = true;
     }
   });
@@ -856,12 +850,7 @@ function updateAdjacentHighlights() {
 }
 
 function doesTileBeat(typeA, typeB) {
-  const rules = {
-    ATK: 'HEX',
-    HEX: 'WARD',
-    WARD: 'ATK'
-  };
-  return rules[typeA] === typeB;
+  return BEATS[typeA] === typeB;
 }
 
 function resolveCombatSimultaneous(activePlayer){
@@ -991,17 +980,17 @@ function scoreBoardFor(player, board){
 function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps, opts={}){
   const opp = (player===1?2:1);
   const B = cloneBoard(board);
-  const T = { player, type: wheelType, originalType: wheelType, shields:0, cursed:false, trapToken:null };
+  const NT = { player, type: wheelType, originalType: wheelType, shields:0, cursed:false, trapToken:null };  
   const trapped = traps.some(t => t.cell===cellIndex && t.player===opp);
 
   // Placement
-  B[cellIndex] = T;
+  B[cellIndex] = NT;
 
   // Placement effects if not trapped
   if (!trapped){
-    if (wheelType==='WARD'){
+    if (wheelType===T.WARD){
       // self-shield + shield best adjacent ally if present
-      T.shields = 1;
+      NT.shields = 1;
       const allies = ADJ[cellIndex].filter(c => B[c] && B[c].player===player);
       if (allies.length){
         // choose the most "contested" ally
@@ -1015,7 +1004,7 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
         }
         B[best].shields = (B[best].shields||0)+1;
       }
-    } else if (wheelType==='HEX'){
+    } else if (wheelType===T.HEX){
       const curseTargets = ADJ[cellIndex].filter(c => B[c] && B[c].player===opp);
       const trapTargets  = ADJ[cellIndex].filter(c => !B[c]);
       // simple policy: if we can curse the center or flip quickly, curse, otherwise trap near the center
@@ -1033,8 +1022,8 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
     }
   } else {
     // trapped: effects cancelled, trap flip before RPS
-    if (T.shields>0) T.shields=0;
-    else T.player = opp;
+    if (NT.shields>0) NT.shields=0;
+    else NT.player = opp;
   }
 
   // Simultaneous RPS (pure variant on local board)
@@ -1083,11 +1072,11 @@ function simulateAITurn() {
   for (const w of availableWheels){
     const face = P.wheels[w];
     for (const cell of empties){
-      if (face==='ECLIPSE'){
+      if (face===T.ECLIPSE){
         // test the 3 affinities and keep the best one
-        for (const aff of ['ATK','HEX','WARD']){
+        for (const aff of [T.ATK,T.HEX,T.WARD]){
           const sc = evaluateMove(2, aff, cell, gameState.board, gameState.traps);
-          if (sc>bestScore){ bestScore=sc; best={wheelIndex:w, cellIndex:cell, type:'ECLIPSE'}; bestEclipseType=aff; }
+          if (sc>bestScore){ bestScore=sc; best={wheelIndex:w, cellIndex:cell, type:T.ECLIPSE}; bestEclipseType=aff; }
         }
       } else {
         const sc = evaluateMove(2, face, cell, gameState.board, gameState.traps);
@@ -1125,10 +1114,9 @@ function simulateAITurn() {
 
   const trappedByP1 = gameState.traps.some(t => t.cell === cellIndex && t.player === 1);
 
-  if (trappedByP1) {
-  } else {
+  if (!trappedByP1) {
     // simple AI effects
-    if (tileType === 'WARD') {
+    if (tileType === T.WARD) {
       tile.shields = 1;
       // bonus: shield an ally if possible
       const adjAllies = getAdjacentCells(cellIndex).filter(c => gameState.board[c] && gameState.board[c].player===2);
@@ -1146,7 +1134,7 @@ function simulateAITurn() {
           gameState.board[bestA].cursed = null;
         }
       }
-    } else if (tileType === 'HEX') {
+    } else if (tileType === T.HEX) {
       const adj = getAdjacentCells(cellIndex);
       const curseTargets = adj.filter(c => gameState.board[c] && gameState.board[c].player===1);
       const trapTargets  = adj.filter(c => !gameState.board[c]);
@@ -1163,7 +1151,7 @@ function simulateAITurn() {
         })[0];
         gameState.traps.push({ cell: bestT, player: 2 });
       }
-    } else if (tileType === 'ECLIPSE') {
+    } else if (tileType === T.ECLIPSE) {
       tile.type = bestEclipseType || 'ATK';
       if (tile.type==='WARD') tile.shields = 1;
       gameState.players[1].eclipseUsed = true;
