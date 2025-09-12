@@ -11,6 +11,7 @@ const TILE_W = 128;
 const TILE_H = 64;
 let ORIGIN_X = 160, ORIGIN_Y = 110;
 const POS = Array(9);
+const PATH = Array(9);
 let hoverCell = -1;
 let needsRedraw = true;
 let trapByCell = Object.create(null);
@@ -28,7 +29,6 @@ function initIsoCanvas() {
   iso.addEventListener('pointerdown', handleIsoPointer);
   iso.addEventListener('pointermove', handleIsoHover);
   iso.addEventListener('pointerleave', () => { hoverCell = -1; invalidate(); });
-  for (let i=0;i<9;i++) ADJ[i] = computeAdjacency(i);
   requestAnimationFrame(renderLoop);
 }
 
@@ -40,8 +40,21 @@ function fitIsoDPI(){
   ictx.setTransform(DPR,0,0,DPR,0,0);
   ORIGIN_X = (cssW/2) | 0;
   ORIGIN_Y = ((cssH/2) - 20) | 0;
-  for (let i=0;i<9;i++){ const x=i%3, y=(i/3)|0; POS[i] = isoPos(x,y); }
+  for (let i=0;i<9;i++){
+    const x=i%3, y=(i/3)|0;
+    POS[i] = isoPos(x,y);
+    const p = new Path2D();
+    const {x:cx,y:cy} = POS[i], w=TILE_W, h=TILE_H;
+    p.moveTo(cx,      cy - h/2);
+    p.lineTo(cx + w/2, cy);
+    p.lineTo(cx,      cy + h/2);
+    p.lineTo(cx - w/2, cy);
+    p.closePath();
+    PATH[i]=p;
+  }
   ictx.font = '16px system-ui, sans-serif';
+  ictx.textAlign = 'center';
+  ictx.textBaseline = 'middle';
   invalidate();
 }
 
@@ -131,7 +144,7 @@ gameState.firstMoveDone = {1:false, 2:false};
 function armCurse(targetCell, byPlayer){
   const t = gameState.board[targetCell];
   if (!t) return;
-  t.cursed = { by: byPlayer, triggerOn: gameState.turnSerial + 1 };
+  t.cu = { by: byPlayer, triggerOn: gameState.turnSerial + 1 };
 }
 
 let messages = [];
@@ -157,8 +170,8 @@ function applyOmenOn(idx){
   const found = gameState.lastFlips.find(f => f.idx===idx);
   //TODO : Make an event on UI to alert the player
   if (!found) { return false; }
-  const T = gameState.board[idx];
-  T.player = found.from;
+  const Tt = gameState.board[idx];
+  Tt.p = found.from;
   gameState.omen[who] = 0;
   return true;
 }
@@ -205,11 +218,10 @@ function drawBoardIso(){
   ictx.clearRect(0,0,iso.width/DPR, iso.height/DPR);
 
   for (let i=0;i<9;i++){
-      const {x:cx, y:cy} = POS[i];
-      const x=i%3, y=(i/3)|0;
-       diamondPath(ictx, cx, cy);
-       ictx.fillStyle = ((x+y)&1) ? ISO_COL.dark2 : ISO_COL.dark;
-       ictx.fill();
+    const {x:cx, y:cy} = POS[i];
+    const x=i%3, y=(i/3)|0;
+    ictx.fillStyle = ((x+y)&1) ? ISO_COL.dark2 : ISO_COL.dark;
+    ictx.fill(PATH[i]);
   }
 
   if (gameState.placementState.adjacentHighlighted?.length){
@@ -226,22 +238,16 @@ function drawBoardIso(){
 
   for (let i=0;i<9;i++){
     const t = gameState.board[i]; if (!t) continue;
-    const x=i%3, y=(i/3)|0; const {x:cx, y:cy} = isoPos(x,y);
-
-    ictx.font = '16px system-ui, sans-serif';
-    ictx.textAlign = 'center';
-    ictx.textBaseline = 'middle';
-    ictx.fillStyle = '#e6e6e6';
+    const {x:cx, y:cy} = POS[i];    ictx.fillStyle = '#e6e6e6';
     ictx.fillText(ICON[t.t], cx, cy-2);
-    if (t.shields>0){
+    if (t.sh>0){
       ictx.fillStyle = '#3BA7A9';
       ictx.fillRect(cx + (TILE_W/2 - 10), cy - (TILE_H/2) + 4, 6, 6);
     }
 
-    diamondPath(ictx, cx, cy);
     ictx.lineWidth = 2;
     ictx.strokeStyle = OWN_COL[t.p];
-    ictx.stroke();
+    ictx.stroke(PATH[i]);
   }
 
   for (let i=0;i<9;i++){
@@ -264,23 +270,21 @@ function drawBoardIso(){
 
   if (gameState.lastFlips?.length){
     for (const f of gameState.lastFlips){
-      const i=f.idx; const {x:cx, y:cy} = POS[i];
-      diamondPath(ictx, cx, cy);
+      const i=f.idx;
       ictx.lineWidth = 3;
       ictx.globalAlpha = 0.7;
       ictx.strokeStyle = OWN_COL[f.to];
-      ictx.stroke();
+      ictx.stroke(PATH[i]);
       ictx.globalAlpha = 1;
     }
   }
 
   if (hoverCell >= 0) {
-    const {x:cx, y:cy} = POS[hoverCell];
-    diamondPath(ictx, cx, cy);
+    const i = hoverCell;
     ictx.lineWidth = 2;
     ictx.setLineDash([3,3]);
     ictx.strokeStyle = ISO_COL.hl;
-    ictx.stroke();
+    ictx.stroke(PATH[i]);
     ictx.setLineDash([]);
   }
 }
@@ -288,30 +292,20 @@ function drawBoardIso(){
 function updateBoard() { invalidate(); }
 
 function handleIsoPointer(ev){
-  const rect = iso.getBoundingClientRect();
-  const px = ev.clientX - rect.left;
-  const py = ev.clientY - rect.top;
-
-  for (let y=0;y<3;y++){
-    for (let x=0;x<3;x++){
-      const {x:cx, y:cy} = POS[y*3+x];
-      if (pointInDiamond(px, py, cx, cy)) {
-        const idx = y*3 + x;
-        cellClick(idx);
-        invalidate();
-        return;
-      }
-    }
+  const r = iso.getBoundingClientRect();
+  const px = ev.clientX - r.left, py = ev.clientY - r.top;
+  for (let i=0;i<9;i++){
+    const p = POS[i];
+    if (pointInDiamond(px, py, p.x, p.y)) { cellClick(i); invalidate(); return; }
   }
 }
 
 function handleIsoHover(ev){
   const rect = iso.getBoundingClientRect();
-  const px = ev.clientX - rect.left;
-  const py = ev.clientY - rect.top;
+  const px = ev.clientX - rect.left, py = ev.clientY - rect.top;
   let found = -1;
   for (let i=0;i<9;i++){
-    const p = POS[i]; if (!p) continue;
+    const p = POS[i];
     if (pointInDiamond(px, py, p.x, p.y)) { found = i; break; }
   }
   const canPlace = (found>=0) && isCellEmpty(found) &&
@@ -477,8 +471,7 @@ function cellClick(cellIndex) {
       if (!gameState.placementState.adjacentHighlighted.includes(cellIndex)) return;
     }
   }
-  const maxTiles = maxTilesAllowedForPlayer(gameState.currentPlayer);
-  if (gameState.placementState.pendingPlacements.length >= maxTiles) return;
+  if (gameState.placementState.pendingPlacements.length >= maxTilesAllowedForPlayer(gameState.currentPlayer)) return;
 
   placeTile(cellIndex);
 }
@@ -601,7 +594,6 @@ function rollFaces(playerIndex, onlyUnused = true) {
   let eclipseRolled = false;
   for (let i = 0; i < 5; i++) {
     if (onlyUnused && P.usedWheels.includes(i)) continue;
-    
     const pool = allowEclipse && !eclipseRolled ? [T.ATK,T.HEX,T.WARD,T.ECLIPSE] : [T.ATK,T.HEX,T.WARD];
     const face = pool[(Math.random()*pool.length)|0];
     if (face===T.ECLIPSE){ P.wheels[i]=T.ECLIPSE; eclipseRolled=true; } else P.wheels[i]=face;
@@ -713,17 +705,6 @@ function isCellEmpty(cellIndex) {
   return !gameState.placementState.pendingPlacements.some(p => p.cellIndex === cellIndex);
 }
 
-function computeAdjacency(cellIndex){
-  const row = (cellIndex/3)|0, col = cellIndex%3;
-  const out = [];
-  const dirs = [[-1,0],[0,1],[1,0],[0,-1]];
-  for (const [dr,dc] of dirs){
-    const r=row+dr, c=col+dc;
-    if (r>=0 && r<3 && c>=0 && c<3) out.push(r*3+c);
-  }
-  return out;
-}
-
 function updateAdjacentHighlights() {
   gameState.placementState.adjacentHighlighted = [];
 
@@ -742,7 +723,7 @@ function doesTileBeat(typeA, typeB) {
 }
 
 function resolveCombatSimultaneousOn(board, activePlayer, cow){
-  const atk = Array.from({length:9},()=>({p1:0,p2:0}));
+  const atk = SCR.atk;
   for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
 
   for (let i=0;i<9;i++){
@@ -750,9 +731,7 @@ function resolveCombatSimultaneousOn(board, activePlayer, cow){
     const neigh = ADJ[i];
     for (const j of neigh){
       const Tt = board[j]; if (!Tt || Tt.p===A.p) continue;
-      if (doesTileBeat(A.t, Tt.t)){
-        (A.p===1?atk[j].p1++:atk[j].p2++);
-      }
+      if (doesTileBeat(A.t, Tt.t)) (A.p===1?atk[j].p1++:atk[j].p2++);
     }
   }
 
@@ -763,10 +742,8 @@ function resolveCombatSimultaneousOn(board, activePlayer, cow){
     if (!p1 && !p2) continue;
 
     if (Tt.sh>0){
-      if      (p1>p2) p1--;
-      else if (p2>p1) p2--;
-      else if (activePlayer===1 && p2>0) p2--;
-      else if (activePlayer===2 && p1>0) p1--;
+      if (p1>p2) p1--; else if (p2>p1) p2--;
+      else if (activePlayer===1 && p2>0) p2--; else if (activePlayer===2 && p1>0) p1--;
       if (cow && cow(j)) {}
       board[j] = {...board[j], sh:0};
     }
@@ -782,35 +759,6 @@ function resolveCombatSimultaneousOn(board, activePlayer, cow){
     }
   }
   return flips;
-}
-
-function resolveCombatOn(board, activePlayer){
-  const atk = SCR.atk;
-  for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
-  for (let i=0;i<9;i++){
-    const A = board[i]; if (!A) continue;
-    const neigh = ADJ[i];
-    for (const j of neigh){
-      const T = board[j]; if (!T || T.player===A.player) continue;
-      if (doesTileBeat(A.type, T.type)){
-        (A.player===1?atk[j].p1++:atk[j].p2++);
-      }
-    }
-  }
-  for (let j=0;j<9;j++){
-    const T = board[j]; if (!T) continue;
-    let {p1,p2} = atk[j];
-    if (!p1 && !p2) continue;
-    if (T.shields>0){
-      if      (p1>p2) p1--;
-      else if (p2>p1) p2--;
-      else if (activePlayer===1 && p2>0) p2--;
-      else if (activePlayer===2 && p1>0) p1--;
-      T.shields = 0;
-    }
-    if (p1>p2 && T.player!==1){ T.player=1; }
-    else if (p2>p1 && T.player!==2){ T.player=2; }
-  }
 }
 
 function resolveCursesForPlayer(endedPlayerId){
@@ -873,7 +821,8 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
   const journal = [];
   const cow = makeCOW(board, B, journal);
   const NT = { p:player, t:wheelType, sh:0, cu:null };
-  const trapped = traps.some(tr => tr.cell===cellIndex && tr.player===opp);
+  const opp = (player===1?2:1);
+  const trapped = traps.some(t => t.cell===cellIndex && t.player===opp);
   journal.push([cellIndex, B[cellIndex]]);
   B[cellIndex] = NT;
 
