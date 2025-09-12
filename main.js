@@ -27,6 +27,11 @@ let needsRedraw = true;      // render invalidation flag
 // Trap index (O(1) lookup by cell). Kept in sync via rebuildTrapIndex().
 let trapByCell = Object.create(null);
 
+// Scratch data for AI to reduce GC
+const SCR = {
+  atk: Array.from({length:9},()=>({p1:0,p2:0})), // reused accumulator
+};
+
 function initIsoCanvas() {
   iso  = document.getElementById('iso');
   if (!iso) { console.warn('Canvas #iso not found'); return; } // avoid a silent crash
@@ -40,7 +45,8 @@ function initIsoCanvas() {
   // Precompute static adjacencies (grid does not change)
   for (let i=0;i<9;i++) ADJ[i] = computeAdjacency(i);
   // Start render loop
-  requestAnimationFrame(renderLoop);}
+  requestAnimationFrame(renderLoop);
+}
 
 function fitIsoDPI(){
   DPR = Math.max(1, window.devicePixelRatio || 1);
@@ -54,6 +60,8 @@ function fitIsoDPI(){
   ORIGIN_Y = ((cssH/2) - 20) | 0;
   // Recompute cached pixel centers
   for (let i=0;i<9;i++){ const x=i%3, y=(i/3)|0; POS[i] = isoPos(x,y); }
+  // Font is constant; set once per DPI change
+  ictx.font = '16px system-ui, sans-serif';
   invalidate();
 }
 
@@ -857,12 +865,14 @@ function doesTileBeat(typeA, typeB) {
 }
 
 function resolveCombatSimultaneous(activePlayer){
-  const atk = Array.from({length:9},()=>({p1:0,p2:0}));
+  // reuse accumulator to avoid GC; manual zeroing
+  const atk = SCR.atk;
+  for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
 
   // 1) collect all attempts (simultaneous)
   for (let i=0;i<9;i++){
     const A = gameState.board[i]; if (!A) continue;
-    const neigh = getAdjacentCells(i);
+    const neigh = ADJ[i];
     for (const j of neigh){
       const T = gameState.board[j]; if (!T || T.player===A.player) continue;
       if (doesTileBeat(A.type, T.type)){ // A.aff beats T.aff (here aff=type)
@@ -891,6 +901,38 @@ function resolveCombatSimultaneous(activePlayer){
     else if (p2>p1 && T.player!==2){ flips.push({idx:j,from:T.player,to:2,src:'RPS'}); T.player=2; }
   }
   return flips;
+}
+
+// Pure variant used by AI sims (operates on provided board)
+function resolveCombatOn(board, activePlayer){
+  const atk = SCR.atk;
+  for (let k=0;k<9;k++){ atk[k].p1=0; atk[k].p2=0; }
+  // collect
+  for (let i=0;i<9;i++){
+    const A = board[i]; if (!A) continue;
+    const neigh = ADJ[i];
+    for (const j of neigh){
+      const T = board[j]; if (!T || T.player===A.player) continue;
+      if (doesTileBeat(A.type, T.type)){
+        (A.player===1?atk[j].p1++:atk[j].p2++);
+      }
+    }
+  }
+  // apply
+  for (let j=0;j<9;j++){
+    const T = board[j]; if (!T) continue;
+    let {p1,p2} = atk[j];
+    if (!p1 && !p2) continue;
+    if (T.shields>0){
+      if      (p1>p2) p1--;
+      else if (p2>p1) p2--;
+      else if (activePlayer===1 && p2>0) p2--;
+      else if (activePlayer===2 && p1>0) p1--;
+      T.shields = 0;
+    }
+    if (p1>p2 && T.player!==1){ T.player=1; }
+    else if (p2>p1 && T.player!==2){ T.player=2; }
+  }
 }
 
 function resolveCursesForPlayer(endedPlayerId){
@@ -960,12 +1002,12 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
     if (wheelType==='WARD'){
       // self-shield + shield best adjacent ally if present
       T.shields = 1;
-      const allies = getAdjacentCells(cellIndex).filter(c => B[c] && B[c].player===player);
+      const allies = ADJ[cellIndex].filter(c => B[c] && B[c].player===player);
       if (allies.length){
         // choose the most "contested" ally
         let best = allies[0], bestScore = -1;
         for (const a of allies){
-          const neigh = getAdjacentCells(a);
+          const neigh = ADJ[a];
           let menaces = 0;
           for (const j of neigh){ const o = B[j]; if (o && o.player!==player && doesTileBeat(o.type, B[a].type)) menaces++; }
           const cur = menaces;
@@ -974,8 +1016,8 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
         B[best].shields = (B[best].shields||0)+1;
       }
     } else if (wheelType==='HEX'){
-      const curseTargets = getAdjacentCells(cellIndex).filter(c => B[c] && B[c].player===opp);
-      const trapTargets  = getAdjacentCells(cellIndex).filter(c => !B[c]);
+      const curseTargets = ADJ[cellIndex].filter(c => B[c] && B[c].player===opp);
+      const trapTargets  = ADJ[cellIndex].filter(c => !B[c]);
       // simple policy: if we can curse the center or flip quickly, curse, otherwise trap near the center
       let did=false;
       if (curseTargets.length){
@@ -995,12 +1037,8 @@ function simulatePlacementAndResolve(player, wheelType, cellIndex, board, traps,
     else T.player = opp;
   }
 
-  // Simultaneous RPS
-  const keep = { board: gameState.board, lastFlips: gameState.lastFlips };
-  gameState.board = B;
-  const flips = resolveCombatSimultaneous(player);
-  gameState.board = keep.board;
-  // (no need to memorize flips here)
+  // Simultaneous RPS (pure variant on local board)
+  resolveCombatOn(B, player);
   return B;
 }
 
