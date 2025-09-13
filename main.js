@@ -279,11 +279,6 @@ const Ankidu = {
   }
 };
 
-function canUseOmenNow() {
-  const who = gameState.currentPlayer;
-  return gameState.omen[who] && gameState.lastFlips && gameState.lastFlips.length > 0;
-}
-
 function applyOmenOn(idx) {
   const who = gameState.currentPlayer;
   if (!canUseOmenNow()) return false;
@@ -475,6 +470,13 @@ function updateWheels() {
 }
 
 function updateControls() {
+  if (gameState.gameOver) {
+    ['rerollBtn','validateBtn','cancelBtn','resetBtn'].forEach(id=>{
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    return;
+  }
   const isHumanTurn = gameState.players[gameState.currentPlayer - 1].isHuman;
   const me = gameState.currentPlayer;
   const canReroll = (me === 1) &&
@@ -502,6 +504,18 @@ function updateControls() {
 }
 
 function updateSpecialEffects() {
+  if (gameState.gameOver) return;
+  const hud = document.getElementById('hud');
+  if (hud && hud.style.display === 'none') return;
+
+  if (gameState.phase !== 'place' &&
+    !gameState.placementState.awaitingWardTarget &&
+    !gameState.placementState.awaitingHexChoice &&
+    !gameState.placementState.awaitingEclipseChoice &&
+    !canUseOmenNow()) {
+  return;
+}
+
   if (gameState.currentPlayer === 1 && canUseOmenNow()) {
     const opts = gameState.lastFlips.map(f => ({
       label: `Cancel flip at cell ${f.idx}`,
@@ -819,6 +833,7 @@ function validateAction() {
 
   if (gameState.turnsTaken[1] >= 3 && gameState.turnsTaken[2] >= 3){
     gameState.lastFlips = gameState.lastFlips || [];
+    gameState.phase = 'end';
     updateUI();
     return endRound();
   }
@@ -1027,9 +1042,7 @@ function evaluateMove(player, wheelType, cellIndex, board, traps) {
 }
 
 function simulateAITurn() {
-  if (isRoundComplete()){
-    return endRound();
-  }
+  if (isRoundComplete()){return endRound();}
   if (canUseOmenNow() && gameState.currentPlayer === 2) {
     let bestIdx = null, bestGain = -1e9;
     for (const f of gameState.lastFlips) {
@@ -1157,6 +1170,8 @@ function simulateAITurn() {
 
 function endRound() {
   gameState.lastFlips = []; 
+  gameState.omen = {1:0, 2:0};
+  gameState.phase = 'end'; 
   const p1Tiles = gameState.board.filter(t => t && t.p === 1).length;
   const p2Tiles = gameState.board.filter(t => t && t.p === 2).length;
 
