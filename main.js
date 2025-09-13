@@ -26,8 +26,7 @@ const MSG = {
   start: {
     body: 'Good night. How can I help you?',
     choices: [
-      { label: 'I seek time before dawn.', action: () => seedRound() },
-      { label: 'Rules', action: () => Ankidu.showHelp() }
+      { label: 'I seek time before dawn.', action: () => startGame() }
     ]
   },
   rules: {
@@ -40,12 +39,11 @@ const MSG = {
       'A curse can be countered by WARD shields',
       '🌙 ECLIPSE: choose type on placement (once per round).',
       'Omen: defender may cancel one flip at start of their turn.'
-    ].join('\n'),
-    choices: [{ label: 'Close', action: () => Ankidu.closeDialog() }]
+    ].join('\n')
   },
   end: (winnerTxt) => ({
     body: winnerTxt + '\nWant to play again?',
-    choices: [{ label: 'Rematch', action: () => { gameState.currentRound = 1; gameState.roundWins = { 1: 0, 2: 0 }; seedRound(); } }]
+    choices: [{ label: 'Rematch', action: () => rematchAction() }]
   })
 };
 
@@ -121,6 +119,33 @@ function pointInDiamond(px, py, cx, cy, w = TILE_W, h = TILE_H) {
   const dx = Math.abs(px - cx);
   const dy = Math.abs(py - cy);
   return (dx / (w / 2) + dy / (h / 2)) <= 1;
+}
+
+function rematchAction(){
+  gameState.gameOver = false;
+  gameState.currentRound = 1;
+  gameState.roundWins = {1:0, 2:0};
+  gameState.roundResults = [];
+  gameState.lastFlips = [];
+  gameState.omen = {1:0, 2:0};
+
+  gameState.placementState = {
+    selectedWheel: null,
+    pendingPlacements: [],
+    adjacentHighlighted: [],
+    awaitingWardTarget: null,
+    awaitingHexChoice: null,
+    awaitingEclipseChoice: null
+  };
+
+  document.querySelectorAll('.btn').forEach(btn => btn.disabled = false);
+
+  const hud = document.getElementById('hud');
+  if (hud) hud.style.display = 'block';
+
+  if (typeof Ankidu.clear === 'function') Ankidu.clear();
+
+  startGame();
 }
 
 // ==== Static adjacency (inline, no helper) ====
@@ -219,8 +244,6 @@ function initializeUI(){
   );
 }
 
-
-
 function startGame() {
   seedRound();
 }
@@ -228,21 +251,20 @@ function startGame() {
 const Ankidu = {
   elText: null, elChoices: null,
   _stack: [],
+  _rulesOpen: false,
 
-  init() {
+  init(){
     this.elText = document.getElementById('bubbleText');
     this.elChoices = document.getElementById('bubbleChoices');
-    document.getElementById('btnHelp')?.addEventListener('click', () => this.openRules());
-    document.getElementById('bubbleCloseBtn')?.addEventListener('click', () => this.closeDialog());
+    document.getElementById('btnHelp')?.addEventListener('click', () => this.toggleRules());
   },
 
-  say(text, choices = []) {
+  say(text, choices=[]){
     if (!this.elText || !this.elChoices) this.init();
     if (!this.elText || !this.elChoices) return;
-
     this.elText.textContent = text;
     this.elChoices.innerHTML = '';
-    for (const c of choices) {
+    for (const c of choices){
       const b = document.createElement('button');
       b.className = 'choice';
       b.textContent = c.label;
@@ -251,39 +273,38 @@ const Ankidu = {
     }
   },
 
-  _snapshot() {
+  _snapshot(){
     const text = this.elText?.textContent || '';
     const nodes = Array.from(this.elChoices?.querySelectorAll('button') || []);
-    const choices = nodes.map(btn => ({
-      label: btn.textContent,
-      onClick: btn.onclick
-    }));
+    const choices = nodes.map(btn => ({ label: btn.textContent, onClick: btn.onclick }));
     return { text, choices };
   },
 
-  openRules() {
-    if (!this.elText || !this.elChoices) this.init();
-    this._stack.push(this._snapshot());
-    this.say(
-      MSG.rules.body,
-      [
-        { label: 'Close', onClick: () => this.closeDialog() }
-      ]
-    );
+  toggleRules(){
+    if (!this._rulesOpen){
+      this._stack.push(this._snapshot());
+      this.say(MSG.rules.body, []);
+      this._rulesOpen = true;
+    } else {
+      const prev = this._stack.pop();
+      if (prev) this.say(prev.text, prev.choices);
+      else this.say(MSG.start.body, MSG.start.choices.map(c => ({label:c.label, onClick:c.action})));
+      this._rulesOpen = false;
+    }
   },
 
-  closeDialog() {
-    const prev = this._stack.pop();
-    if (prev) this.say(prev.text, prev.choices);
-    else this.say(MSG.start.body, MSG.start.choices.map(c => ({ label: c.label, onClick: c.action })));
-  }
+  clear(){
+    this._stack = [];
+    if (!this.elText || !this.elChoices) this.init();
+    if (this.elText) this.elText.textContent = '';
+    if (this.elChoices) this.elChoices.innerHTML = '';
+  },
 };
 
 function applyOmenOn(idx) {
   const who = gameState.currentPlayer;
   if (!canUseOmenNow()) return false;
   const found = gameState.lastFlips.find(f => f.idx === idx);
-  //TODO : Make an event on UI to alert the player
   if (!found) { return false; }
   const Tt = gameState.board[idx];
   Tt.p = found.from;
@@ -1198,7 +1219,10 @@ function endRound() {
 }
 
 function seedRound() {
-  document.getElementById('hud').style.display = 'block';
+  const hud = document.getElementById('hud');
+  if (hud) hud.style.display = 'block';
+
+  if (typeof Ankidu.clear === 'function') Ankidu.clear();
 
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
@@ -1214,16 +1238,17 @@ function seedRound() {
   rollFaces(1, false);
 
   const startPlayer = Math.random() < 0.5 ? 1 : 2;
-
   gameState.currentPlayer = startPlayer;
   gameState.omen = startPlayer === 1 ? { 1: 0, 2: 1 } : { 1: 1, 2: 0 };
   gameState.phase = 'place';
 
   updateUI();
 
-    if (startPlayer === 2) {
+  if (startPlayer === 2) {
     Ankidu.say("I'm starting...", []);
     setTimeout(simulateAITurn, 2000);
+  } else {
+    updateSpecialEffects();
   }
 }
 
