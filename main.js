@@ -1166,10 +1166,11 @@ function endRound() {
 
 function seedRound() {
   document.getElementById('hud').style.display = 'block';
-  
+
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
   gameState.lastFlips = [];
+  rebuildTrapIndex();
   gameState.currentTurn = 1;
   gameState.rerollsLeft = { 1: 2, 2: 2 };
   gameState.rerollUsedThisTurn = false;
@@ -1198,13 +1199,26 @@ function endGame() {
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
 
   const p1 = gameState.roundWins[1], p2 = gameState.roundWins[2];
+  const hud = document.getElementById('hud');
+  if (hud) hud.style.display = 'none';
   let txt;
-  if (p1 > p2) txt = `You won the match (${p1}–${p2}).`;
-  else if (p2 > p1) txt = `I won the match (${p2}–${p1}).`;
-  else txt = `Draw.`;
+  let body, choices;
+  if (p1 > p2) { body = `You won the match (${p1}–${p2}).\n\n“I grant you the time you came for. Cherish those new lives.”`;
+  } else if (p2 > p1) {    body = `I won the match (${p2}–${p1}).\n\n“Forgive me — the night takes as it gives. Try again, and I may yet bend the hours in your favor.”`;
+  } else { body = `Draw.\n\n“Shadows linger. One more round?”`;}
 
-  const endMsg = MSG.end(txt);
-  Ankidu.say(endMsg.body, endMsg.choices.map(c => ({ label: c.label, onClick: c.action })));
+  choices = [{ 
+    label:'Rematch',
+    onClick: ()=>{ 
+      gameState.currentRound=1; 
+      gameState.roundWins={1:0,2:0}; 
+      gameState.roundResults=[]; 
+      const hud2 = document.getElementById('hud');
+      if (hud2) hud2.style.display = 'block';
+      seedRound(); 
+    } 
+  }];
+  Ankidu.say(body, choices);
 
   updateUI();
 }
