@@ -5,6 +5,8 @@ const OWN_COL = { 1: '#4da3ff', 2: '#ff4d4d' };
 const ISO_COL = { dark: '#040404ff', dark2: '#4E2A1B', hl: '#ffffff' };
 const COL_TRAP = '#E2C044';
 const COL_CURSE = '#9b59ff';
+const P1_LABEL = 'Stray';
+const P2_LABEL = 'Ankidu';
 
 function isAdj(a, b) { return ADJ[a]?.includes(b); }
 
@@ -24,18 +26,19 @@ const MSG = {
   start: {
     body: 'Good night. How can I help you?',
     choices: [
-      { label: 'Time before dawn.', action: () => startGame() },
-      { label: 'Rules', action: () => Ankidu.openRules() }
+      { label: 'I seek time before dawn.', action: () => seedRound() },
+      { label: 'Rules', action: () => Ankidu.showHelp() }
     ]
   },
   rules: {
     body: [
-      'Goal: control more tiles after 3 turns.',
-      'Types: ATK > HEX > WARD > ATK.',
+      'Goal: Win 2 out of 3 rounds by controlling the most tiles',
+      'Types: ATK ⚔️ > HEX 👁️ > WARD 🛡️ > ATK ⚔️.',
       'Place up to 2 tiles on T1–T2 (adjacent), 1 tile on T3.',
-      'WARD shields itself (+1) and one adjacent ally.',
-      'HEX: curse an adjacent enemy (delayed flip) or place a trap on an empty adjacent cell (immediate flip on entry).',
-      'ECLIPSE: choose type on placement (once per round).',
+      '🛡️ WARD shields itself (+1) and one adjacent ally.',
+      '👁️ HEX: curse an adjacent enemy (delayed flip) or place a trap on an empty adjacent cell (immediate flip on entry).',
+      'A curse can be countered by WARD shields',
+      '🌙 ECLIPSE: choose type on placement (once per round).',
       'Omen: defender may cancel one flip at start of their turn.'
     ].join('\n'),
     choices: [{ label: 'Close', action: () => Ankidu.closeDialog() }]
@@ -192,19 +195,22 @@ function armCurse(targetCell, byPlayer) {
 let messages = [];
 
 // Initialize the UI
-function initializeUI() {
+function initializeUI(){
   createBoard();
   createWheels();
+  gameState.currentRound = 1;
+  gameState.roundWins = {1:0, 2:0};
+  gameState.roundResults = [];
   Ankidu.init();
-
+  const n1 = document.getElementById('p1Name'); if (n1) n1.textContent = P1_LABEL;
+  const n2 = document.getElementById('p2Name'); if (n2) n2.textContent = P2_LABEL;
   Ankidu.say(
-    MSG.start.body,
-    [
-      { label: 'Time before dawn.', onClick: () => startGame() },
-      { label: 'Rules', onClick: () => Ankidu.openRules() }
-    ]
+    MSG.start.body, 
+    MSG.start.choices.map(c=>({label:c.label, onClick:c.action}))
   );
 }
+
+
 
 function startGame() {
   seedRound();
@@ -309,17 +315,27 @@ function updateUI() {
 }
 
 function updateGameInfo() {
-  document.getElementById('currentRound').textContent = gameState.currentRound;
-  document.getElementById('currentTurn').textContent = gameState.currentTurn;
-  document.getElementById('currentPlayer').textContent = gameState.currentPlayer;
-  document.getElementById('p1Score').textContent = gameState.roundWins[1];
-  document.getElementById('p2Score').textContent = gameState.roundWins[2];
+  const p1s = document.getElementById('p1Score');
+  const p2s = document.getElementById('p2Score');
+  if (p1s) p1s.textContent = gameState.roundWins[1];
+  if (p2s) p2s.textContent = gameState.roundWins[2];
 
-  const me = gameState.currentPlayer;
-  const rr = document.getElementById('rerollsUsed');
-  if (rr) rr.textContent = (2 - gameState.rerollsLeft[me]);
-  const ph = document.getElementById('phaseInfo');
-  if (ph) ph.textContent = `Phase: ${gameState.phase}`;
+  const bar = document.getElementById('scoreBar');
+  if (bar){
+    bar.classList.toggle('turn-p1', gameState.currentPlayer === 1);
+    bar.classList.toggle('turn-p2', gameState.currentPlayer === 2);
+  }
+  const n1 = document.getElementById('p1Name');
+  const n2 = document.getElementById('p2Name');
+  if (n1 && n2) {
+    n1.classList.remove('active','p1');
+    n2.classList.remove('active','p2');
+    if (gameState.currentPlayer === 1) {
+      n1.classList.add('active','p1');
+    } else {
+      n2.classList.add('active','p2');
+    }
+  }
 }
 
 function drawBoardIso() {
@@ -347,9 +363,11 @@ function drawBoardIso() {
     ictx.fillStyle = '#e6e6e6';
     ictx.fillText(ICON[t.t], cx, cy - 2);
 
-    if (t.sh > 0) {
+    if (t.sh>0){
       ictx.fillStyle = '#3BA7A9';
-      ictx.fillRect(cx + (TILE_W / 2 - 10), cy - (TILE_H / 2) + 4, 6, 6);
+      ictx.beginPath();
+      ictx.arc(cx + 16, cy - 16, 5, 0, Math.PI*2);
+      ictx.fill();
     }
 
     ictx.lineWidth = 2;
@@ -475,10 +493,26 @@ function updateControls() {
 }
 
 function updateSpecialEffects() {
+  if (gameState.currentPlayer === 1 && canUseOmenNow()) {
+    const opts = gameState.lastFlips.map(f => ({
+      label: `Cancel flip at cell ${f.idx}`,
+      onClick: () => {
+        const ok = applyOmenOn(f.idx);
+        if (ok) {
+          Ankidu.say('Omen used. The flip was undone.');
+          updateUI();
+        } else {
+          Ankidu.say('Omen unavailable for that cell.');
+        }
+      }
+    }));
+    opts.push({ label: 'Keep all flips', onClick: () => { gameState.omen[1] = 0; updateUI(); } });
+    Ankidu.say('🜂 Omen: you may cancel **one** flip that just happened.', opts);
+    return;
+  }
   if (gameState.placementState.awaitingWardTarget) {
     const { availableTargets } = gameState.placementState.awaitingWardTarget;
-    Ankidu.say('🛡️ WARD: click an ADJACENT ALLY to shield.',
-      availableTargets.map(idx => ({ label: 'Cell ' + idx, onClick: () => handleWardTarget(gameState.placementState.awaitingWardTarget.tileCell, idx) })));
+    Ankidu.say('🛡️ WARD: click an ADJACENT ALLY to shield.');
     return;
   }
   if (gameState.placementState.awaitingHexChoice) {
@@ -486,7 +520,7 @@ function updateSpecialEffects() {
     const choices = [];
     curseTargets.forEach(idx => choices.push({ label: 'Curse ' + idx, onClick: () => handleHexChoice(tileCell, idx, 'curse') }));
     trapTargets.forEach(idx => choices.push({ label: 'Trap ' + idx, onClick: () => handleHexChoice(tileCell, idx, 'trap') }));
-    Ankidu.say('🔮 HEX: click an ADJACENT cell — empty=TRAP (yellow outline), enemy=CURSE (purple outline).', choices);
+    Ankidu.say('🔮 HEX: click an ADJACENT cell — empty=TRAP (yellow outline), enemy=CURSE (purple outline).');
     return;
   }
   if (gameState.placementState.awaitingEclipseChoice) {
