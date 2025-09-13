@@ -136,6 +136,15 @@ const ADJ = [
   [5, 7]
 ];
 
+function isRoundComplete(){
+  return (gameState.turnsTaken[1] >= 3 && gameState.turnsTaken[2] >= 3) || gameState.gameOver;
+}
+
+function canUseOmenNow(){
+  const who = gameState.currentPlayer;
+  return !isRoundComplete() && gameState.omen[who] && gameState.lastFlips && gameState.lastFlips.length>0;
+}
+
 function invalidate() { needsRedraw = true; }
 function renderLoop() {
   if (needsRedraw) { drawBoardIso(); needsRedraw = false; }
@@ -807,10 +816,15 @@ function validateAction() {
   resolveCursesForPlayer(1);
   if (gameState.firstMoveDone[1] === false) gameState.firstMoveDone[1] = true;
   gameState.turnsTaken[1] = (gameState.turnsTaken[1] || 0) + 1;
+
+  if (gameState.turnsTaken[1] >= 3 && gameState.turnsTaken[2] >= 3){
+    gameState.lastFlips = gameState.lastFlips || [];
+    updateUI();
+    return endRound();
+  }
+
   gameState.currentPlayer = 2;
-
   updateUI();
-
   setTimeout(simulateAITurn, 800);
 }
 
@@ -1013,6 +1027,9 @@ function evaluateMove(player, wheelType, cellIndex, board, traps) {
 }
 
 function simulateAITurn() {
+  if (isRoundComplete()){
+    return endRound();
+  }
   if (canUseOmenNow() && gameState.currentPlayer === 2) {
     let bestIdx = null, bestGain = -1e9;
     for (const f of gameState.lastFlips) {
@@ -1139,6 +1156,7 @@ function simulateAITurn() {
 }
 
 function endRound() {
+  gameState.lastFlips = []; 
   const p1Tiles = gameState.board.filter(t => t && t.p === 1).length;
   const p2Tiles = gameState.board.filter(t => t && t.p === 2).length;
 
@@ -1195,6 +1213,7 @@ function seedRound() {
 }
 
 function endGame() {
+  gameState.lastFlips = [];
   gameState.gameOver = true;
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = true);
 
