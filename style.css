@@ -110,7 +110,7 @@ body {
     left: 50%;
     bottom: 0;
     transform: translateX(-50%);
-    display: grid;
+    display: none;    
     gap: 10px;
     justify-items: center;
 }
@@ -140,6 +140,7 @@ body {
     display: flex;
     gap: 8px;
     justify-content: center;
+    margin: 10px 0;
 }
 .btn {
     padding: 6px 10px;

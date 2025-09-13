@@ -1165,6 +1165,8 @@ function endRound() {
 }
 
 function seedRound() {
+  document.getElementById('hud').style.display = 'block';
+  
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
   gameState.lastFlips = [];
