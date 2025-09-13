@@ -129,15 +129,6 @@ function rematchAction(){
   gameState.lastFlips = [];
   gameState.omen = {1:0, 2:0};
 
-  gameState.placementState = {
-    selectedWheel: null,
-    pendingPlacements: [],
-    adjacentHighlighted: [],
-    awaitingWardTarget: null,
-    awaitingHexChoice: null,
-    awaitingEclipseChoice: null
-  };
-
   document.querySelectorAll('.btn').forEach(btn => btn.disabled = false);
 
   const hud = document.getElementById('hud');
@@ -1224,6 +1215,18 @@ function seedRound() {
 
   if (typeof Ankidu.clear === 'function') Ankidu.clear();
 
+  gameState.gameOver = false;
+  gameState.phase = 'place';
+  gameState.placementState = {
+    selectedWheel: null,
+    pendingPlacements: [],
+    adjacentHighlighted: [],
+    awaitingWardTarget: null,
+    awaitingHexChoice: null,
+    awaitingEclipseChoice: null
+  };
+  gameState.lastFlips = [];
+  gameState.turnSerial = 0;
   gameState.board = Array(9).fill(null);
   gameState.traps = [];
   gameState.lastFlips = [];
@@ -1266,17 +1269,11 @@ function endGame() {
   } else if (p2 > p1) {    body = `I won the match (${p2}–${p1}).\n\n“Forgive me — the night takes as it gives. Try again, and I may yet bend the hours in your favor.”`;
   } else { body = `Draw.\n\n“Shadows linger. One more round?”`;}
 
-  choices = [{ 
-    label:'Rematch',
-    onClick: ()=>{ 
-      gameState.currentRound=1; 
-      gameState.roundWins={1:0,2:0}; 
-      gameState.roundResults=[]; 
-      const hud2 = document.getElementById('hud');
-      if (hud2) hud2.style.display = 'block';
-      seedRound(); 
-    } 
+choices = [{ 
+    label: 'Rematch',
+    onClick: () => rematchAction()
   }];
+  
   Ankidu.say(body, choices);
 
   updateUI();

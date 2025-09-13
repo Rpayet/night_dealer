@@ -43,7 +43,7 @@ body {
     background: transparent;
 }
 .bubble {
-    margin: 128px auto 0;
+    margin: auto;
     width: 360px;
     max-width: 38vw;
     background: linear-gradient(180deg, rgba(30, 36, 60, .6), rgba(15, 18, 30, .55));
