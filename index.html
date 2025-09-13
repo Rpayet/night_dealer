@@ -9,48 +9,33 @@
 </head>
 
 <body>
-    <div class="game-container">
-        <div class="header">
-            <h1>🌙 Night Dealer</h1>
-        </div>
-
-        <div class="game-info">
-            <div class="scores">
-                <div>P1: <span id="p1Score">0</span></div>
-                <div>P2: <span id="p2Score">0</span></div>
+    <div class="scene">
+        <div id="ankidu" class="bubble">
+            <div class="bubble-header">
+                <button id="btnHelp" class="icon-btn" title="Règles">?</button>
             </div>
-            <div class="turn-info">
-                <div>Round <span id="currentRound">1</span></div>
-                <div>Turn <span id="currentTurn">1</span></div>
-                <div>Player <span id="currentPlayer">1</span></div>
+            <div id="bubbleText" class="bubble-text">Select a wheel, then select a cell to place tile.</div>
+            <div id="bubbleChoices" class="bubble-choices"></div>
+        </div>
+
+        <div class="board-wrap">
+            <canvas id="iso" width="640" height="480"></canvas>
+        </div>
+
+        <div class="hud">
+            <div id="player1Wheels" class="wheels"></div>
+            <div class="controls">
+                <button class="btn" id="rerollBtn" onclick="rerollAction()">Reroll</button>
+                <button class="btn" id="validateBtn" onclick="validateAction()" disabled>Validate</button>
+                <button class="btn" id="cancelBtn" onclick="cancelAction()">Cancel</button>
+                <button class="btn" id="resetBtn" onclick="resetAction()">Reset</button>
             </div>
-        </div>
-
-        <div class="board-container">
-            <div id="gameBoard" class="board-wrap">
-                <canvas id="iso" width="320" height="240"></canvas>
+            <div class="score">
+                <span>P1: <b id="p1Score">0</b></span>
+                <span>P2: <b id="p2Score">0</b></span>
+                <span>R<span id="currentRound">1</span> · T<span id="currentTurn">1</span> · P<span
+                        id="currentPlayer">1</span></span>
             </div>
-        </div>
-
-        <div class="special-effects" id="specialEffects">
-            <div class="effect-prompt" id="effectPrompt">Place your tiles...</div>
-        </div>
-
-        <div class="players-container">
-            <div class="player-section">
-                <div class="player-title player1-title">Player 1 (Human)</div>
-                <div class="wheels" id="player1Wheels">
-                    <!-- 5 wheels will be generated here -->
-                </div>
-            </div>
-        </div>
-
-        <div class="controls">
-            <button class="btn" id="rerollBtn" onclick="rerollAction()">Reroll</button>
-            <button class="btn" id="validateBtn" onclick="validateAction()" disabled>Validate Turn</button>
-            <button class="btn" id="omenBtn" onclick="omenAction()" style="display:none">Omen</button>
-            <button class="btn" id="cancelBtn" onclick="cancelAction()">Cancel Last</button>
-            <button class="btn" id="resetBtn" onclick="resetAction()">Reset All</button>
         </div>
     </div>
 </body>
